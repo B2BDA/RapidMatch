@@ -1,0 +1,25 @@
+[project]
+name = "rapidmatch"
+version = "0.1.0"
+description = "RapidMatch (RiMatch): explainable treatment/control group matching"
+requires-python = ">=3.11"
+dependencies = [
+  "duckdb>=1.0",
+  "pyarrow>=14",
+  "numpy>=1.26",
+  "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+excel = ["openpyxl>=3.1"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rapidmatch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

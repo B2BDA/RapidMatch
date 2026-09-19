@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Control group matching — interactive walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0F0A0A;
+    --glass:rgba(255,255,255,0.05); --glass-strong:rgba(255,255,255,0.09);
+    --border:rgba(255,255,255,0.12); --border-soft:rgba(255,255,255,0.07);
+    --ink:#F5EFEC; --ink-muted:rgba(245,239,236,0.60); --ink-faint:rgba(245,239,236,0.38);
+    --red:#E4453D; --red-strong:#FF6E63; --red-tint:rgba(228,69,61,0.16); --red-tint-strong:rgba(228,69,61,0.30);
+    --white-glow:#FFFFFF;
+    /* aliases for names the SVG-generating JS still references inline */
+    --teal:var(--red); --teal-strong:var(--red-strong); --brass:var(--red-strong);
+    --surface:rgba(255,255,255,0.14); --surface-2:rgba(255,255,255,0.04);
+    --max:920px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:'IBM Plex Sans',sans-serif;font-size:16px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;position:relative;overflow-x:hidden;
+  }
+  .glow{position:fixed;border-radius:50%;filter:blur(110px);pointer-events:none;z-index:0;}
+  .glow.g1{top:-220px;right:-160px;width:520px;height:520px;background:radial-gradient(circle,rgba(228,69,61,0.42),transparent 70%);}
+  .glow.g2{bottom:-260px;left:-200px;width:560px;height:560px;background:radial-gradient(circle,rgba(228,69,61,0.22),transparent 70%);}
+  .wrap{position:relative;z-index:1;max-width:var(--max);margin:0 auto;padding:0 24px;}
+  h1,h2{font-family:'Fraunces',serif;font-weight:600;margin:0;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  :focus-visible{outline:2px solid var(--red-strong);outline-offset:2px;}
+  button{font-family:inherit;cursor:pointer;}
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:var(--red-tint-strong);border-radius:4px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  .glass{background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);box-shadow:0 10px 34px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05);}
+
+  header.page{padding:48px 0 8px;}
+  header.page h1{font-size:clamp(24px,3.4vw,32px);letter-spacing:-0.01em;}
+  header.page p{color:var(--ink-muted);font-size:15px;margin:10px 0 0;max-width:60ch;}
+
+  details.why{margin:24px 0 8px;border-radius:14px;padding:14px 18px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);box-shadow:0 10px 34px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05);}
+  details.why summary{cursor:pointer;font-weight:600;font-size:14.5px;list-style:none;display:flex;align-items:center;gap:8px;color:var(--ink);}
+  details.why summary::-webkit-details-marker{display:none;}
+  details.why summary::before{content:'+';color:var(--red-strong);font-size:18px;line-height:1;width:16px;}
+  details.why[open] summary::before{content:'–';}
+  .why-body{padding:14px 2px 4px;}
+  .why-toggle{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px;}
+  .why-toggle button{border:none;background:transparent;padding:7px 14px;font-size:13.5px;font-weight:600;color:var(--ink-muted);}
+  .why-toggle button.active{background:var(--red);color:#fff;}
+  table.why-tbl{width:100%;border-collapse:collapse;font-size:14px;}
+  table.why-tbl th{text-align:left;color:var(--ink-muted);font-weight:600;font-size:12.5px;padding:0 8px 8px 0;border-bottom:1px solid var(--border-soft);}
+  table.why-tbl td{padding:8px 8px 8px 0;border-bottom:1px solid var(--border-soft);color:var(--ink);}
+  table.why-tbl tr:last-child td{border-bottom:none;}
+  .winner{background:var(--red-tint);}
+  .why-note{font-size:13px;color:var(--ink-muted);margin-top:10px;}
+
+  .stepper{display:flex;gap:6px;margin:32px 0 4px;border-bottom:1px solid var(--border-soft);}
+  .stepper button{background:none;border:none;padding:12px 4px;margin-right:22px;font-size:15px;font-weight:600;color:var(--ink-muted);position:relative;}
+  .stepper button .n{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--glass-strong);font-size:12px;margin-right:8px;color:var(--ink-muted);}
+  .stepper button.active{color:var(--ink);}
+  .stepper button.active .n{background:var(--red);color:#fff;}
+  .stepper button.active::after{content:'';position:absolute;left:0;right:22px;bottom:-1px;height:2px;background:var(--red);box-shadow:0 0 10px var(--red);}
+
+  .stage{padding:26px 0 70px;}
+  .stage-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+  .stage-head h2{font-size:20px;}
+  .stage-head .hint{font-size:13.5px;color:var(--ink-muted);}
+
+  .chip{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:999px;font-size:13px;font-weight:600;border:1px solid var(--border-soft);background:var(--glass);margin:3px;color:var(--ink-muted);}
+  .chip.target{background:var(--red);color:#fff;border-color:var(--red);cursor:pointer;box-shadow:0 0 14px rgba(228,69,61,0.35);}
+  .chip.target.selected{outline:2px solid var(--white-glow);outline-offset:2px;}
+  .chip.control{color:var(--ink-muted);}
+  .chip .r{font-size:10px;opacity:0.75;}
+
+  .strata-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:640px){.strata-grid{grid-template-columns:1fr;}}
+  .stratum-card{border-radius:14px;padding:16px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);}
+  .stratum-card.has-selected{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset, 0 0 20px rgba(228,69,61,0.18);}
+  .stratum-card .title{font-size:13px;font-weight:600;margin-bottom:4px;color:var(--ink);}
+  .stratum-card .count{font-size:12.5px;color:var(--ink-muted);margin-bottom:10px;}
+  .stratum-card .count.warn{color:var(--red-strong);}
+  .edge-note{font-size:13.5px;color:var(--ink-muted);margin:0 0 16px;}
+  .edge-note b{color:var(--ink);}
+
+  .target-strip{margin-bottom:18px;}
+  .formula-box{border-radius:14px;padding:16px 18px;margin-bottom:18px;font-size:14.5px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);}
+  .formula-box .line{margin:4px 0;color:var(--ink);}
+  .formula-box .mono{color:var(--red-strong);}
+  table.dist{width:100%;border-collapse:collapse;font-size:14px;}
+  table.dist th{text-align:left;color:var(--ink-muted);font-size:12.5px;font-weight:600;padding:0 8px 8px 0;border-bottom:1px solid var(--border-soft);}
+  table.dist td{padding:8px 8px 8px 0;border-bottom:1px solid var(--border-soft);color:var(--ink);}
+  table.dist tr.best td{font-weight:600;background:var(--red-tint);}
+  .empty-note{font-size:14px;color:var(--red-strong);background:var(--red-tint);padding:12px 14px;border-radius:10px;border:1px solid var(--red-tint-strong);}
+
+  .controls-row{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .btn{border:1px solid var(--border);background:var(--glass);border-radius:8px;padding:8px 14px;font-size:13.5px;font-weight:600;color:var(--ink);}
+  .btn.primary{background:var(--red);border-color:var(--red);color:#fff;box-shadow:0 0 16px rgba(228,69,61,0.35);}
+  .btn:disabled{opacity:0.35;cursor:default;box-shadow:none;}
+  .step-caption{font-size:14px;border-radius:10px;padding:10px 14px;margin-bottom:16px;min-height:20px;background:var(--glass);border:1px solid var(--border-soft);color:var(--ink);}
+  .step-caption.assigned{border-color:var(--red);background:var(--red-tint);}
+  .step-caption.skipped{border-color:var(--border);color:var(--ink-muted);}
+  table.match{width:100%;border-collapse:collapse;font-size:13.5px;}
+  table.match th{text-align:left;color:var(--ink-muted);font-size:12px;font-weight:600;padding:0 6px 6px 0;border-bottom:1px solid var(--border-soft);}
+  table.match td{padding:6px 6px 6px 0;border-bottom:1px solid var(--border-soft);color:var(--ink);}
+  table.match tr.pending td{color:var(--ink-faint);}
+  table.match tr.assigned td{color:var(--red-strong);}
+  table.match tr.skipped .status{color:var(--ink-faint);}
+  .match-wrap{max-height:320px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:10px;padding:0 12px;background:rgba(255,255,255,0.02);}
+  .match-wrap table{margin:0;}
+
+  svg.numline{width:100%;height:150px;border-radius:14px;margin-top:16px;background:var(--glass);border:1px solid var(--border-soft);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);}
+  svg.numline text{font-family:'IBM Plex Sans';font-size:9px;fill:var(--ink-muted);}
+  svg.numline .lane-label{font-size:10px;font-weight:600;fill:var(--ink-muted);}
+
+  .verify-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px;}
+  @media(max-width:640px){.verify-stats{grid-template-columns:1fr;}}
+  .vstat{border-radius:14px;padding:16px 18px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);}
+  .vstat .n{font-family:'Fraunces',serif;font-size:26px;font-weight:600;color:var(--ink);}
+  .vstat .d{font-size:13px;color:var(--ink-muted);margin-top:2px;}
+  .vstat.matched{border-color:var(--red);box-shadow:0 0 20px rgba(228,69,61,0.15);}
+  .vstat.matched .n{color:var(--red-strong);}
+  .vstat.naive .n{color:var(--ink-faint);}
+  .ks-row{margin-top:22px;}
+  .ks-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+  .ks-bar .who{width:70px;font-size:13px;color:var(--ink-muted);flex:none;}
+  .ks-track{flex:1;height:12px;background:var(--glass-strong);border-radius:6px;overflow:hidden;}
+  .ks-fill{height:100%;border-radius:6px;}
+  .ks-fill.matched{background:var(--red);box-shadow:0 0 10px rgba(228,69,61,0.5);}
+  .ks-fill.naive{background:var(--ink-faint);}
+  .ks-bar .val{width:50px;text-align:right;font-size:13px;color:var(--ink-muted);flex:none;}
+  .coverage-note{font-size:14px;color:var(--ink-muted);margin-top:22px;}
+  .coverage-note b{color:var(--ink);}
+
+  footer{padding:30px 0 60px;border-top:1px solid var(--border-soft);}
+  footer p{font-size:13px;color:var(--ink-muted);margin:0;}
+</style>
+</head>
+<body>
+<div class="glow g1"></div>
+<div class="glow g2"></div>
+<div class="wrap">
+
+  <header class="page">
+    <h1>How we build a fair control group</h1>
+    <p>16 customers. 6 were targeted by a campaign, 10 weren't. Click through to watch the actual grouping, scoring, and matching happen — no black box, no hidden steps.</p>
+  </header>
+
+  <details class="why">
+    <summary>Why not just random sampling or raw distance?</summary>
+    <div class="why-body">
+      <div class="why-toggle">
+        <button id="btnRaw" class="active">Raw distance</button>
+        <button id="btnStd">Standardized distance</button>
+      </div>
+      <table class="why-tbl" id="whyTable"></table>
+      <p class="why-note" id="whyNote"></p>
+    </div>
+  </details>
+
+  <nav class="stepper" id="stepper">
+    <button data-stage="group"><span class="n">1</span>Group</button>
+    <button data-stage="score"><span class="n">2</span>Score</button>
+    <button data-stage="match"><span class="n">3</span>Match</button>
+    <button data-stage="verify"><span class="n">4</span>Verify</button>
+    <button data-stage="correct"><span class="n">5</span>Correct</button>
+  </nav>
+
+  <div class="stage" id="stageContent"></div>
+
+</div>
+
+<footer>
+  <div class="wrap"><p>Live-computed on the 16 customers shown above — every number on this page is calculated in your browser, not pre-written.</p></div>
+</footer>
+
+<script>
+const TARGET = [
+  ['T1','North',82,7], ['T2','South',91,5], ['T3','North',76,8],
+  ['T4','North',68,6], ['T5','South',95,4], ['T6','North',71,7],
+];
+const CONTROL = [
+  ['C1','North',60,2], ['C2','South',40,6], ['C3','North',45,9],
+  ['C4','South',90,2], ['C5','North',70,8], ['C6','South',55,5],
+  ['C7','North',60,3], ['C8','South',93,2], ['C9','North',35,10],
+  ['C10','South',65,4],
+];
+
+function median(arr){ const s=[...arr].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
+const targetIncomes = TARGET.map(t=>t[2]);
+const EDGE = median(targetIncomes);
+const bucket = inc => inc<=EDGE?0:1;
+const stratumKey = (region,inc) => `${bucket(inc)}-${region[0]}`;
+const MEAN = targetIncomes.reduce((a,b)=>a+b,0)/targetIncomes.length;
+const VAR = targetIncomes.reduce((a,b)=>a+(b-MEAN)**2,0)/targetIncomes.length;
+const STD = Math.sqrt(VAR);
+const z = inc => (inc-MEAN)/STD;
+
+const tById = Object.fromEntries(TARGET.map(t=>[t[0],{id:t[0],region:t[1],income:t[2],tenure:t[3],stratum:stratumKey(t[1],t[2])}]));
+const cById = Object.fromEntries(CONTROL.map(c=>[c[0],{id:c[0],region:c[1],income:c[2],tenure:c[3],stratum:stratumKey(c[1],c[2])}]));
+
+const STRATA = {};
+['0-N','1-N','0-S','1-S'].forEach(k=>STRATA[k]={targets:[],controls:[]});
+Object.values(tById).forEach(t=>STRATA[t.stratum].targets.push(t.id));
+Object.values(cById).forEach(c=>STRATA[c.stratum].controls.push(c.id));
+
+let CANDIDATES = [];
+Object.values(tById).forEach(t=>{
+  Object.values(cById).forEach(c=>{
+    if(t.stratum===c.stratum){
+      const d = Math.abs(z(t.income)-z(c.income));
+      CANDIDATES.push({tid:t.id, cid:c.id, d, s:Math.exp(-d)});
+    }
+  });
+});
+CANDIDATES.sort((a,b)=>b.s-a.s);
+
+function runGreedy(list){
+  const usedT=new Set(), usedC=new Set(), assigned=[];
+  for(const c of list){
+    if(usedT.has(c.tid)||usedC.has(c.cid)) continue;
+    usedT.add(c.tid); usedC.add(c.cid); assigned.push(c);
+  }
+  return {usedT, usedC, assigned};
+}
+const FULL = runGreedy(CANDIDATES);
+
+function ecdfAt(arr,x){ return arr.filter(v=>v<=x).length/arr.length; }
+function ksStat(a,b){ let max=0; for(const x of [...a,...b]){ const d=Math.abs(ecdfAt(a,x)-ecdfAt(b,x)); if(d>max) max=d; } return max; }
+
+// round-half-to-even (banker's rounding) -- matches Python's round(), used by
+// the real drift-correction module so this demo stays faithful to it
+function roundHalfEven(x){
+  const f = Math.floor(x), diff = x-f;
+  if(diff<0.5) return f;
+  if(diff>0.5) return f+1;
+  return f%2===0 ? f : f+1;
+}
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function seededShuffle(arr, seed){
+  const rng = mulberry32(seed);
+  const a = [...arr];
+  for(let i=a.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+  return a;
+}
+
+// Module 11: tenure was never part of stratification/matching -- check it anyway
+const MONITOR_EDGE = median(TARGET.map(t=>t[3]));
+const monitorBucket = v => v<=MONITOR_EDGE ? 0 : 1;
+let correctionApplied = false;
+
+let state = { stage:'group', selectedTarget:'T3', matchIndex:0, log:[], usedT:new Set(), usedC:new Set() };
+const STRATUM_LABEL = { '0-N':'North · income ≤ 79', '1-N':'North · income > 79', '0-S':'South · income ≤ 79', '1-S':'South · income > 79' };
+
+function chip(obj, opts={}){
+  const isTarget = TARGET.some(t=>t[0]===obj.id);
+  const cls = ['chip', isTarget ? 'target':'control'];
+  if(opts.selected) cls.push('selected');
+  const clickAttr = opts.clickable ? `data-select="${obj.id}"` : '';
+  return `<span class="${cls.join(' ')}" ${clickAttr}>${obj.id} <span class="r">${obj.region[0]}</span> $${obj.income}k</span>`;
+}
+
+function renderGroup(){
+  let html = `<div class="stage-head"><h2>Group similar customers</h2><span class="hint">Click a targeted customer to trace its group</span></div>`;
+  html += `<p class="edge-note">Comparisons only ever happen <b>within a group</b> — a rich Southerner is never compared to a poor Northerner, no matter how "close" the raw numbers might look.</p>`;
+  html += `<p class="edge-note">Income split point = <b>$${EDGE}k</b> — the median income of the 6 targeted customers. Applied to everyone.</p>`;
+  html += `<div class="strata-grid">`;
+  for(const key of ['1-N','0-N','1-S','0-S']){
+    const s = STRATA[key];
+    const hasSel = s.targets.includes(state.selectedTarget);
+    const warn = s.targets.length>0 && s.controls.length===0;
+    html += `<div class="stratum-card ${hasSel?'has-selected':''}">
+      <div class="title">${STRATUM_LABEL[key]}</div>
+      <div class="count ${warn?'warn':''}">${s.targets.length} targeted · ${s.controls.length} not targeted ${warn?'— no match possible':''}</div>
+      <div>${s.targets.map(id=>chip(tById[id],{clickable:true,selected:id===state.selectedTarget})).join('')}</div>
+      <div>${s.controls.map(id=>chip(cById[id])).join('')}</div>
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function renderScore(){
+  const t = tById[state.selectedTarget];
+  let html = `<div class="stage-head"><h2>Score every candidate</h2><span class="hint">Pick a targeted customer</span></div>`;
+  html += `<div class="target-strip">${TARGET.map(([id])=>chip(tById[id],{clickable:true,selected:id===state.selectedTarget})).join('')}</div>`;
+
+  const zt = z(t.income);
+  html += `<div class="formula-box">
+    <div class="line"><b>${t.id}</b> — income $${t.income}k, group <span class="mono">${STRATUM_LABEL[t.stratum]}</span></div>
+    <div class="line">Standardize: <span class="mono">z = (${t.income} − ${MEAN.toFixed(1)}) / ${STD.toFixed(2)} = ${zt.toFixed(3)}</span></div>
+  </div>`;
+
+  const candidates = STRATA[t.stratum].controls.map(cid=>{
+    const c = cById[cid];
+    const zc = z(c.income);
+    const d = Math.abs(zt-zc);
+    const s = Math.exp(-d);
+    return {c, zc, d, s};
+  }).sort((a,b)=>b.s-a.s);
+
+  if(candidates.length===0){
+    html += `<p class="empty-note">No non-targeted customers share this group — ${t.id} has nothing to be compared against, and will be marked "no control available."</p>`;
+  } else {
+    html += `<table class="dist"><thead><tr><th>Candidate</th><th>Income</th><th>z</th><th>Distance</th><th>Strength = e<sup>−d</sup></th></tr></thead><tbody>`;
+    candidates.forEach((row,i)=>{
+      html += `<tr class="${i===0?'best':''}"><td>${row.c.id}</td><td>$${row.c.income}k</td><td>${row.zc.toFixed(3)}</td><td>${row.d.toFixed(3)}</td><td>${row.s.toFixed(3)}${i===0?' — closest':''}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+  return html;
+}
+
+function laneY(region){ return region==='North' ? 48 : 100; }
+function xFor(income){ return 30 + (income-30)/(100-30)*340; }
+
+function renderNumline(assignedPairs, highlightIds=[]){
+  let svg = `<svg class="numline" viewBox="0 0 400 140">`;
+  svg += `<text class="lane-label" x="6" y="44">North</text><text class="lane-label" x="6" y="104">South</text>`;
+  const edgeX = xFor(EDGE);
+  svg += `<line x1="${edgeX}" y1="20" x2="${edgeX}" y2="120" stroke="var(--border)" stroke-dasharray="3,3"/>`;
+  assignedPairs.forEach(a=>{
+    const t=tById[a.tid], c=cById[a.cid];
+    svg += `<line x1="${xFor(t.income)}" y1="${laneY(t.region)}" x2="${xFor(c.income)}" y2="${laneY(c.region)}" stroke="var(--teal)" stroke-width="2"/>`;
+  });
+  TARGET.forEach(([id,region,income])=>{
+    const used = assignedPairs.some(a=>a.tid===id);
+    const hl = highlightIds.includes(id);
+    svg += `<circle cx="${xFor(income)}" cy="${laneY(region)}" r="7" fill="${used?'var(--teal-strong)':'var(--teal)'}" stroke="${hl?'var(--brass)':'none'}" stroke-width="3"/>`;
+    svg += `<text x="${xFor(income)}" y="${laneY(region)-12}" text-anchor="middle">${id}</text>`;
+  });
+  CONTROL.forEach(([id,region,income])=>{
+    const used = assignedPairs.some(a=>a.cid===id);
+    const hl = highlightIds.includes(id);
+    svg += `<circle cx="${xFor(income)}" cy="${laneY(region)}" r="6" fill="${used?'var(--surface-2)':'var(--surface)'}" stroke="${hl?'var(--brass)':'var(--ink-muted)'}" stroke-width="${hl?3:1.5}" opacity="${used?0.5:1}"/>`;
+    svg += `<text x="${xFor(income)}" y="${laneY(region)+16}" text-anchor="middle">${id}</text>`;
+  });
+  svg += `</svg>`;
+  return svg;
+}
+
+function renderMatch(){
+  let html = `<div class="stage-head"><h2>Match, strongest first</h2><span class="hint">Global list, sorted by strength — no one gets reused</span></div>`;
+  html += `<p class="edge-note">Sorted globally by strength, not grouped by target or stratum — the single best match anywhere gets locked in first, so a strong pair never waits behind a weaker one just because of grouping. You'll see the same target or control listed more than once below: that's every valid candidate pair being considered, not a duplicate — only one will end up <b>Assigned</b>.</p>`;
+  html += `<div class="controls-row">
+    <button class="btn primary" id="stepBtn" ${state.matchIndex>=CANDIDATES.length?'disabled':''}>Next match →</button>
+    <button class="btn" id="resetBtn">Reset</button>
+    <span class="hint">${state.matchIndex} / ${CANDIDATES.length} pairs reviewed</span>
+  </div>`;
+
+  const last = state.log[state.log.length-1];
+  let capClass = '', capText = 'Click "Next match" to start.';
+  if(last){
+    capClass = last.outcome==='assigned' ? 'assigned' : 'skipped';
+    capText = last.outcome==='assigned'
+      ? `<b>${last.tid} ↔ ${last.cid}</b> — distance ${last.d.toFixed(2)}, strength ${last.s.toFixed(2)}. Both free → <b>assigned</b>.`
+      : `<b>${last.tid} – ${last.cid}</b> — strength ${last.s.toFixed(2)}, but ${last.reason} → <b>skipped</b>.`;
+  }
+  html += `<div class="step-caption ${capClass}">${capText}</div>`;
+
+  const assignedSoFar = state.log.filter(l=>l.outcome==='assigned');
+  html += renderNumline(assignedSoFar, last?[last.tid,last.cid]:[]);
+
+  html += `<div class="match-wrap"><table class="match"><thead><tr><th>#</th><th>Target</th><th>Control</th><th>Dist</th><th>Strength</th><th class="status">Status</th></tr></thead><tbody>`;
+  CANDIDATES.forEach((c,i)=>{
+    const done = i < state.matchIndex;
+    const entry = done ? state.log[i] : null;
+    const rowClass = !done ? 'pending' : (entry.outcome==='assigned'?'assigned':'skipped');
+    const statusText = !done ? '—' : (entry.outcome==='assigned' ? 'Assigned' : `Skipped (${entry.reason})`);
+    html += `<tr class="${rowClass}"><td>${i+1}</td><td>${c.tid}</td><td>${c.cid}</td><td>${c.d.toFixed(2)}</td><td>${c.s.toFixed(2)}</td><td class="status">${statusText}</td></tr>`;
+  });
+  html += `</tbody></table></div>`;
+  return html;
+}
+
+function renderVerify(){
+  const matchedIncomes = FULL.assigned.map(a=>cById[a.cid].income);
+  const matchedMean = matchedIncomes.reduce((a,b)=>a+b,0)/matchedIncomes.length;
+  const naiveIncomes = CONTROL.slice(0,5).map(c=>c[2]);
+  const naiveMean = naiveIncomes.reduce((a,b)=>a+b,0)/naiveIncomes.length;
+  const noMatch = TARGET.map(t=>t[0]).filter(id=>!FULL.usedT.has(id));
+
+  const ksMatched = ksStat(targetIncomes, matchedIncomes);
+  const ksNaive = ksStat(targetIncomes, naiveIncomes);
+  const maxKs = Math.max(ksMatched, ksNaive, 0.01);
+
+  let html = `<div class="stage-head"><h2>Check the result</h2><span class="hint">Matched group vs. a naive random pick of 5</span></div>`;
+  html += `<div class="verify-stats">
+    <div class="vstat"><div class="n">$${MEAN.toFixed(1)}k</div><div class="d">Targeted customers' average income</div></div>
+    <div class="vstat matched"><div class="n">$${matchedMean.toFixed(1)}k</div><div class="d">Matched control's average income</div></div>
+    <div class="vstat naive"><div class="n">$${naiveMean.toFixed(1)}k</div><div class="d">Naive random control's average income</div></div>
+  </div>`;
+
+  html += `<div class="ks-row">
+    <div class="ks-bar"><span class="who">Matched</span><div class="ks-track"><div class="ks-fill matched" style="width:${(ksMatched/maxKs*100).toFixed(0)}%"></div></div><span class="val">${ksMatched.toFixed(2)}</span></div>
+    <div class="ks-bar"><span class="who">Naive</span><div class="ks-track"><div class="ks-fill naive" style="width:${(ksNaive/maxKs*100).toFixed(0)}%"></div></div><span class="val">${ksNaive.toFixed(2)}</span></div>
+    <p class="hint">KS statistic — how different the income distributions are. Lower is better.</p>
+  </div>`;
+
+  html += renderNumline(FULL.assigned);
+  html += `<p class="coverage-note"><b>${FULL.assigned.length}/6</b> targeted customers matched. <b>${noMatch.join(', ')}</b> had no candidates in its group and is flagged "no control available" — visible, not hidden.</p>`;
+  return html;
+}
+
+function renderCorrect(){
+  const matchedIds = FULL.assigned.map(a=>a.cid);
+  const targetTenures = TARGET.map(t=>t[3]);
+  const tBuckets = targetTenures.map(monitorBucket);
+  const tCount0 = tBuckets.filter(b=>b===0).length, tCount1 = tBuckets.length - tCount0;
+
+  const matchedTenures = matchedIds.map(id=>cById[id].tenure);
+  const mBucketOf = Object.fromEntries(matchedIds.map(id=>[id, monitorBucket(cById[id].tenure)]));
+  const bucket0Members = matchedIds.filter(id=>mBucketOf[id]===0);
+  const bucket1Members = matchedIds.filter(id=>mBucketOf[id]===1);
+
+  const sampleTotal = matchedIds.length;
+  const target0 = roundHalfEven((tCount0/TARGET.length)*sampleTotal);
+  const target1 = roundHalfEven((tCount1/TARGET.length)*sampleTotal);
+  const excess0 = bucket0Members.length - target0;
+  const excess1 = bucket1Members.length - target1;
+
+  const ksBefore = ksStat(targetTenures, matchedTenures);
+
+  let toRemove = [];
+  if(excess0>0) toRemove = seededShuffle(bucket0Members, 42).slice(0, excess0);
+  if(excess1>0) toRemove = toRemove.concat(seededShuffle(bucket1Members, 43).slice(0, excess1));
+
+  const finalIds = correctionApplied ? matchedIds.filter(id=>!toRemove.includes(id)) : matchedIds;
+  const finalTenures = finalIds.map(id=>cById[id].tenure);
+  const ksAfter = correctionApplied ? ksStat(targetTenures, finalTenures) : null;
+
+  let html = `<div class="stage-head"><h2>Check for hidden drift</h2><span class="hint">Tenure was never part of matching</span></div>`;
+  html += `<p class="edge-note"><b>Tenure</b> (years at company) wasn't used to group or score anyone. It's checked anyway — a variable can drift even when the ones you matched on look perfect.</p>`;
+
+  html += `<table class="dist"><thead><tr><th></th><th>≤ ${MONITOR_EDGE}yrs</th><th>&gt; ${MONITOR_EDGE}yrs</th><th>KS statistic</th></tr></thead><tbody>
+    <tr><td>Targeted (6)</td><td>${tCount0}</td><td>${tCount1}</td><td>—</td></tr>
+    <tr class="${ksBefore>0.05?'best':''}"><td>Matched control (${sampleTotal})</td><td>${bucket0Members.length}</td><td>${bucket1Members.length}</td><td>${ksBefore.toFixed(2)}${ksBefore>0.05?' — flagged':''}</td></tr>
+  </tbody></table>`;
+
+  html += `<div class="controls-row" style="margin-top:16px;">
+    <button class="btn primary" id="fixBtn" ${correctionApplied?'disabled':''}>Remove over-represented rows</button>
+    ${correctionApplied?'<button class="btn" id="undoFixBtn">Reset</button>':''}
+  </div>`;
+
+  if(!correctionApplied){
+    html += `<div class="step-caption">Group ≤${MONITOR_EDGE}yrs has ${bucket0Members.length} rows but should have ~${target0} to match target's split → <b>${excess0} excess</b>. Group &gt;${MONITOR_EDGE}yrs has ${bucket1Members.length} but should have ~${target1} → already short, nothing to remove there.</div>`;
+  } else {
+    html += `<div class="step-caption assigned">Removed <b>${toRemove.join(', ')}</b> — randomly selected from the over-represented ≤${MONITOR_EDGE}yrs group. KS improved from <b>${ksBefore.toFixed(2)}</b> to <b>${ksAfter.toFixed(2)}</b>.</div>`;
+    html += `<p class="coverage-note">Not fully fixed — the &gt;${MONITOR_EDGE}yrs group was already short and this design never backfills with a fresh draw, only trims excess. Control group is now <b>${finalIds.length}</b> rows, down from ${sampleTotal}.</p>`;
+  }
+
+  return html;
+}
+
+
+function render(){
+  document.querySelectorAll('#stepper button').forEach(b=>b.classList.toggle('active', b.dataset.stage===state.stage));
+  const map = { group:renderGroup, score:renderScore, match:renderMatch, verify:renderVerify, correct:renderCorrect };
+  document.getElementById('stageContent').innerHTML = map[state.stage]();
+  document.querySelectorAll('[data-select]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.selectedTarget = el.dataset.select; render(); });
+  });
+  if(state.stage==='match'){
+    const stepBtn = document.getElementById('stepBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    stepBtn && stepBtn.addEventListener('click', doStep);
+    resetBtn && resetBtn.addEventListener('click', ()=>{ state.matchIndex=0; state.log=[]; state.usedT=new Set(); state.usedC=new Set(); render(); });
+  }
+  if(state.stage==='correct'){
+    const fixBtn = document.getElementById('fixBtn');
+    const undoBtn = document.getElementById('undoFixBtn');
+    fixBtn && fixBtn.addEventListener('click', ()=>{ correctionApplied=true; render(); });
+    undoBtn && undoBtn.addEventListener('click', ()=>{ correctionApplied=false; render(); });
+  }
+}
+
+function doStep(){
+  if(state.matchIndex>=CANDIDATES.length) return;
+  const c = CANDIDATES[state.matchIndex];
+  let outcome='assigned', reason='';
+  if(state.usedT.has(c.tid)){ outcome='skipped'; reason=`${c.tid} already matched`; }
+  else if(state.usedC.has(c.cid)){ outcome='skipped'; reason=`${c.cid} already used`; }
+  if(outcome==='assigned'){ state.usedT.add(c.tid); state.usedC.add(c.cid); }
+  state.log.push({...c, outcome, reason});
+  state.matchIndex++;
+  render();
+}
+
+document.getElementById('stepper').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-stage]');
+  if(!btn) return;
+  state.stage = btn.dataset.stage;
+  render();
+});
+
+const whyData = {
+  raw: { rows:[
+    ['Target','—','$80,000','2.0 yrs',''],
+    ['Candidate A','vs target','$82,000 (+2,000)','8.0 yrs (+6.0)','distance ~ 2000.01'],
+    ['Candidate B','vs target','$60,000 (+20,000)','2.5 yrs (+0.5)','distance ~ 20000.00'],
+  ], winner:1, note:"Raw distance picks Candidate A -- income's dollar scale completely swamps tenure, even though B is nearly identical on tenure." },
+  std: { rows:[
+    ['Target','—','z = 0.00','z = 0.00',''],
+    ['Candidate A','vs target','dz ~ 0.13','dz ~ 2.00','distance ~ 2.00'],
+    ['Candidate B','vs target','dz ~ 1.33','dz ~ 0.17','distance ~ 1.34'],
+  ], winner:2, note:"Once both attributes are standardized, Candidate B wins instead -- the decision flips once income can't dominate by raw scale alone." }
+};
+function renderWhy(mode){
+  const d = whyData[mode];
+  let html = `<thead><tr><th></th><th></th><th>Income</th><th>Tenure</th><th>Distance</th></tr></thead><tbody>`;
+  d.rows.forEach((r,i)=>{ html += `<tr class="${i===d.winner?'winner':''}"><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`; });
+  html += `</tbody>`;
+  document.getElementById('whyTable').innerHTML = html;
+  document.getElementById('whyNote').textContent = d.note;
+}
+document.getElementById('btnRaw').addEventListener('click', ()=>{ document.getElementById('btnRaw').classList.add('active'); document.getElementById('btnStd').classList.remove('active'); renderWhy('raw'); });
+document.getElementById('btnStd').addEventListener('click', ()=>{ document.getElementById('btnStd').classList.add('active'); document.getElementById('btnRaw').classList.remove('active'); renderWhy('std'); });
+renderWhy('raw');
+
+render();
+</script>
+</body>
+</html>
