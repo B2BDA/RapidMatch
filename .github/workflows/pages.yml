@@ -27,6 +27,7 @@ jobs:
       - name: Assemble static site
         run: |
           mkdir -p _site
+          cp control-group-interactive.html _site/index.html
           cp control-group-interactive.html _site/control-group-interactive.html
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
