@@ -10,6 +10,8 @@ between who was targeted and who wasn't.
 
 Fully **rule-based and explainable** end to end — no ML, no black boxes.
 
+<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/cc126462-4a0e-4a96-aa3b-b2249784b17e" />
+
 ## Installation
 
 > **Recommended:** install with **uv** (fast, reliable package manager).
