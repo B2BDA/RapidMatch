@@ -192,11 +192,21 @@ you matched on (`match_vars`) and the ones you only watch (`monitor_vars`):
 | Statistic | Kinds | What a high value means |
 |-----------|-------|--------------------------|
 | **JS distance** (Jensen–Shannon) | categorical | target & matched-control distributions drifted apart |
-| **KS statistic** | numeric | largest gap between the two ECDFs |
+| **KS statistic** (Kolmogorov–Smirnov) | numeric | largest gap between the two ECDFs |
 
-**What is an ECDF? A staircase.** `ECDF(x)` = *"what fraction of the group is
-at or below x?"* — flat between rows, stepping up `1/n` at each observed value.
-Tenures of the 6 matched controls `[1, 4, 6, 7, 8, 8]`:
+**Read the two statistics with your gut first:**
+
+- **JS — "how much did the *recipe* change?"** Hand each group a pile of
+  category marbles (`region`, `occupation`…). JS is one number saying how
+  different the two mixes are: `0` = identical recipe, `1` = nothing in common.
+- **KS — "how big is the tallest gap between the two staircases?"** KS is one
+  number over the whole numeric column: `0` = the groups stack up identically,
+  and small = the matched controls rise at the same rates as the target.
+
+**What is an ECDF (Empirical Cumulative Distribution Function)? A staircase.**
+`ECDF(x)` = *"what fraction of the group is at or below x?"* — flat between
+rows, stepping up `1/n` at each observed value. Tenures of the 6 matched
+controls `[1, 4, 6, 7, 8, 8]`:
 
 | x you check | rows ≤ x | ECDF |
 |-------------|----------|------|
