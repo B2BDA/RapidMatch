@@ -114,6 +114,107 @@ Given a dataset with a binary treatment flag, RapidMatch:
 10. **Trims** control rows responsible for drifted monitor groups (weakest matches first)
 11. **Reports** coverage, balance, drift log, and the data profile
 
+### The five matching steps, with a worked example
+
+Every number below follows from one tiny population — **6 targeted customers,
+10 untargeted** — so you can recompute any value on a napkin. Guess "small
+enough to spoil the answer" and read on — the math is exactly what the
+interactive explainer animates.
+
+**The population.** Global stats (computed from the target group only, so the
+grid is defined by who was treated, never by the control pool):
+
+| Variable | Target mean | Target std | Target rows | Control rows |
+|----------|-------------|------------|-------------|--------------|
+| income (z)  | `0.00` | `1.00` | | |
+| tenure (z)  | `0.00` | `1.00` | | |
+| **stratum** | | | 1 target | 3 controls |
+
+> Every z-score below is `(x − target_mean) / target_std`, with weights
+> `income = 1.0`, `tenure = 1.5`.
+
+**1 — Score every eligible target–control pair (global z + weighted distance).**
+
+Each eligible pair becomes three numbers: per-variable z-differences, a
+weighted Euclidean distance, and `match_strength = exp(−distance)`:
+
+| Pair | z(income) | Δz | z(tenure) | Δz | distance | strength |
+|------|-----------|----|-----------|----|----------|----------|
+| T1–C1 | `1.00` / `1.00` | `0.00` | `0.50` / `0.50` | `0.00` | `0.00` | **1.000** |
+| T3–C \<any\> | `1.95` / `1.00` | `0.95` | `0.75` / `0.50` | `0.25` | `1.00` | 0.368 |
+
+Wait — why z-scores at all? Raw `$` income spans ~`$80k` while tenure spans
+~`5y`; on raw units the income gap would silently *dominate* the score, and a
+year of tenure couldn't compete with a thousand dollars. Z-scoring both puts
+them on a common scale: `z = (x − mean) / std`, here `(80 − 70)/10 = 1.00`.
+The `tenure = 1.5` weight then says: a one-`std` tenure gap is worth 1.5× a
+one-`std` income gap — your call, applied everywhere.
+
+**2 — Match greedily, strongest pairs first, across all strata.**
+
+Every pair is scored globally, so a `0.98` pair in stratum A is taken before a
+`0.60` pair in stratum B — the whole population competes, not per-silo.
+A control row is **never reused** (sampling without replacement):
+
+| Match | Target | Control | strength | action |
+|-------|--------|---------|----------|--------|
+| 1 | T2 | C5 | `0.98` | ✓ assign |
+| 2 | T1 | C1 | `0.91` | ✓ assign |
+| 3 | T3 | C2 | `0.53` | ✓ assign |
+| 4 | T6 | C4 | `0.40` | ✗ below tolerance |
+
+Once C2 is taken by T3, T4's candidate C2 is skipped — the control can only
+match once in the whole run.
+
+**3 — Filter by a global strength tolerance.**
+
+After all strata are matched, the strength scores are collapsed, and a global
+cutoff (default `tolerance = 0.8`, the 80th-percentile of strengths actually
+scored) keeps only assignments at/above it — the threshold `cutoff` is applied
+*across all strata at once*, keeping match strength comparable everywhere:
+
+| assignment | strength | status |
+|------------|----------|--------|
+| T1–C1 | `0.98` | ✅ kept |
+| T2–C5 | `0.91` | ✅ kept |
+| T3–C2 | `0.49` | ❌ under cutoff |
+| T6–C4 | `0.40` | ❌ under cutoff |
+
+Weak matches aren't hidden — they're reported as `below_tolerance`, and counted
+in the coverage breakdown.
+
+**4 — Validate balance (JS for categories, KS for numeric), on match_vars
+and monitor_vars.**
+
+Balance is judged with one statistic per variable type, on *both* the variables
+you matched on (`match_vars`) and the ones you only watch (`monitor_vars`):
+
+| Statistic | Kinds | What a high value means |
+|-----------|-------|--------------------------|
+| **JS distance** (Jensen–Shannon) | categorical | target & matched-control distributions drifted apart |
+| **KS statistic** | numeric | largest gap between the two ECDFs |
+
+The example above is categorical (`region`): JS ≈ `0.21` vs. a naive random
+pick's `0.52` — the matched set tracks the target's group mix far more closely.
+
+**5 — Trim control rows that caused monitor drift (weakest matches first).**
+
+If a *monitored* (unmatched-on) group is over-represented after step 4 — say
+matched-tenure rows piled into the `≤ 5y` bucket — RapidMatch trims the matched
+control rows responsible, weakest `match_strength` first, until the group
+rebalances. **This is trim-only**: rows are removed, never re-swapped for a new
+one, so coverage can shrink but the remaining pairs never change identity.
+
+```mermaid
+flowchart TD
+  A["score all pairs: distance, strength"] --> B["greedy match: strongest first"]
+  B --> C["global tolerance cutoff"]
+  C --> D{"balance (JS / KS)"}
+  D -- "drifted" --> E["trim weakest matches"]
+  E --> D
+  D -- "balanced" --> F["assemble result"]
+```
+
 ### Key Design Decisions
 
 - **Global z-scoring** (not per-stratum), keeping `match_strength` comparable
