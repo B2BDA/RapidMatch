@@ -35,6 +35,11 @@ class MatchConfig:
             (default 0.10).
         ks_threshold: Flag a numeric var when the KS statistic exceeds this
             (default 0.05).
+        n_workers: Parallel threads used to score strata, or None for serial.
+            Order of results is preserved regardless of worker count.
+        duckdb_threads: DuckDB execution threads, or None for DuckDB default.
+        progress: Show terminal-only progress bars (requires tqdm installed
+            via the `progress` extra and a TTY stderr).
     """
 
     match_vars: Sequence[str]
@@ -49,6 +54,9 @@ class MatchConfig:
     id_col: Optional[str] = None
     js_threshold: float = 0.10
     ks_threshold: float = 0.05
+    n_workers: Optional[int] = None
+    duckdb_threads: Optional[int] = None
+    progress: bool = False
 
     def __post_init__(self) -> None:
         # Frozen dataclass: tuples/dicts so callers cannot mutate after construct.
@@ -98,3 +106,7 @@ def _validate(cfg: MatchConfig) -> None:
         raise ValueError("js_threshold must be in [0, 1]")
     if not 0.0 <= cfg.ks_threshold <= 1.0:
         raise ValueError("ks_threshold must be in [0, 1]")
+    if cfg.n_workers is not None and cfg.n_workers < 1:
+        raise ValueError("n_workers must be >= 1 when provided")
+    if cfg.duckdb_threads is not None and cfg.duckdb_threads < 1:
+        raise ValueError("duckdb_threads must be >= 1 when provided")

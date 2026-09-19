@@ -10,12 +10,13 @@ Trim only — never swap in a replacement (see plan.md section 7).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
-import pandas as pd
+import pyarrow as pa
 
 from rapidmatch.balance.checker import BalanceRow
+from rapidmatch.balance.columns import float_values, label_values
 from rapidmatch.drift.diagnose import ExcessGroup, excess_groups
 
 
@@ -37,35 +38,37 @@ class DriftCorrection:
 
 
 def correct_drift(
-    target: pd.DataFrame,
-    matched_control: pd.DataFrame,
-    pair_strength: dict[int, float],
+    target: pa.Table,
+    matched_control: pa.Table,
+    pair_strength: Mapping[int, float],
     flagged: Sequence[BalanceRow],
     n_bins: int = 4,
 ) -> DriftCorrection:
     """Trim excess control rows. Weakest match_strength dropped first."""
-    remaining = set(int(i) for i in matched_control["_rm_id"].tolist())
+    remaining = set(int(i) for i in _ids(matched_control))
     events: list[TrimEvent] = []
-    control = matched_control.copy()
+    control = matched_control
 
     for row in flagged:
         if row.role != "monitor" or not row.flagged:
             continue
-        if row.variable not in target.columns or row.variable not in control.columns:
+        if row.variable not in target.column_names or row.variable not in control.column_names:
             continue
-        live = control[control["_rm_id"].isin(remaining)]
-        if live.empty:
+        live = _filter_ids(control, remaining)
+        if live.num_rows == 0:
             break
         groups = excess_groups(target, live, row.variable, row.kind, n_bins=n_bins)
         for group in groups:
-            live = control[control["_rm_id"].isin(remaining)]
-            members = _members(live, target, group, n_bins)
-            if members.empty:
+            live = _filter_ids(control, remaining)
+            if live.num_rows == 0:
+                break
+            mask = _members(live, target, group, n_bins)
+            if not np.any(mask):
                 continue
             ordered = sorted(
-                members["_rm_id"].astype(int).tolist(),
-                key=lambda i: pair_strength.get(i, 0.0),
+                int(i) for i in _ids(live)[mask]
             )
+            ordered.sort(key=lambda i: pair_strength.get(i, 0.0))
             drop = ordered[: group.excess_rows]
             for i in drop:
                 remaining.discard(i)
@@ -84,19 +87,31 @@ def correct_drift(
 
 
 def _members(
-    control: pd.DataFrame,
-    target: pd.DataFrame,
+    control: pa.Table,
+    target: pa.Table,
     group: ExcessGroup,
     n_bins: int,
-) -> pd.DataFrame:
+) -> np.ndarray:
+    """Boolean mask over `control` rows belonging to `group`."""
     if group.kind == "js":
-        mask = control[group.variable].astype(str) == str(group.group)
-        return control.loc[mask]
-    t_num = target[group.variable].to_numpy(dtype=np.float64)
+        return label_values(control, group.variable) == str(group.group)
+    t_num = float_values(target, group.variable)
     t_num = t_num[np.isfinite(t_num)]
     probs = [i / n_bins for i in range(1, n_bins)]
     edges = np.unique(np.quantile(t_num, probs)) if len(t_num) else np.array([])
-    bins = np.digitize(
-        control[group.variable].to_numpy(dtype=np.float64), edges, right=True
+    bins = np.digitize(float_values(control, group.variable), edges, right=True)
+    return bins == int(group.group)
+
+
+def _ids(table: pa.Table) -> np.ndarray:
+    return np.asarray(
+        table.column("_rm_id").to_numpy(zero_copy_only=False), dtype=np.int64
     )
-    return control.loc[bins == int(group.group)]
+
+
+def _filter_ids(table: pa.Table, remaining: set[int]) -> pa.Table:
+    if not remaining:
+        return table.slice(0, 0)
+    values = np.fromiter(remaining, dtype=np.int64, count=len(remaining))
+    mask = np.isin(_ids(table), values)
+    return table.filter(mask)

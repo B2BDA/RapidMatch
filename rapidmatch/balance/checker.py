@@ -8,10 +8,11 @@ Monitor_vars are the primary check.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
-import pandas as pd
+import pyarrow as pa
 
+from rapidmatch.balance.columns import float_values, label_values
 from rapidmatch.balance.js_distance import js_distance
 from rapidmatch.balance.ks_statistic import ks_statistic
 from rapidmatch.ingestion.validate import is_numeric_dtype
@@ -36,27 +37,27 @@ class BalanceChecker:
 
     def check(
         self,
-        target: pd.DataFrame,
-        control: pd.DataFrame,
+        target: pa.Table,
+        control: pa.Table,
         variables: Sequence[str],
         role: str,
-        dtypes: dict[str, str],
+        dtypes: Mapping[str, str],
     ) -> list[BalanceRow]:
         rows: list[BalanceRow] = []
         for var in variables:
-            if var not in target.columns or var not in control.columns:
+            if var not in target.column_names or var not in control.column_names:
                 continue
             numeric = is_numeric_dtype(dtypes.get(var, ""))
             if numeric:
                 stat = ks_statistic(
-                    target[var].to_numpy(), control[var].to_numpy()
+                    float_values(target, var), float_values(control, var)
                 )
                 threshold = self.ks_threshold
                 kind = "ks"
             else:
                 stat = js_distance(
-                    target[var].astype(str).to_numpy(),
-                    control[var].astype(str).to_numpy(),
+                    label_values(target, var),
+                    label_values(control, var),
                 )
                 threshold = self.js_threshold
                 kind = "js"
@@ -74,11 +75,11 @@ class BalanceChecker:
 
 
 def check_balance(
-    target: pd.DataFrame,
-    control: pd.DataFrame,
+    target: pa.Table,
+    control: pa.Table,
     match_vars: Sequence[str],
     monitor_vars: Sequence[str],
-    dtypes: dict[str, str],
+    dtypes: Mapping[str, str],
     js_threshold: float = 0.10,
     ks_threshold: float = 0.05,
 ) -> list[BalanceRow]:

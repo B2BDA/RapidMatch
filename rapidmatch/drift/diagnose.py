@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-import pandas as pd
+import pyarrow as pa
+
+from rapidmatch.balance.columns import float_values, label_values
 
 
 @dataclass(frozen=True)
@@ -24,37 +26,37 @@ class ExcessGroup:
 
 
 def excess_groups(
-    target: pd.DataFrame,
-    control: pd.DataFrame,
+    target: pa.Table,
+    control: pa.Table,
     variable: str,
     kind: str,
     n_bins: int = 4,
 ) -> list[ExcessGroup]:
     """Groups in control whose share exceeds the target's share."""
     if kind == "js":
-        t_vals = target[variable].astype(str)
-        c_vals = control[variable].astype(str)
+        t_vals = label_values(target, variable)
+        c_vals = label_values(control, variable)
+        t_vc = _value_counts(t_vals)
+        c_vc = _value_counts(c_vals)
         labels = sorted(set(t_vals) | set(c_vals))
-        t_share = t_vals.value_counts(normalize=True)
-        c_share = c_vals.value_counts(normalize=True)
         n_control = len(c_vals)
         out = []
         for lab in labels:
-            ts = float(t_share.get(lab, 0.0))
-            cs = float(c_share.get(lab, 0.0))
+            ts = float(t_vc.get(lab, 0.0))
+            cs = float(c_vc.get(lab, 0.0))
             excess = int(np.floor(max(0.0, (cs - ts) * n_control)))
             if excess > 0:
                 out.append(ExcessGroup(variable, kind, lab, ts, cs, excess))
         return sorted(out, key=lambda g: g.excess_rows, reverse=True)
 
-    t_num = target[variable].to_numpy(dtype=np.float64)
+    t_num = float_values(target, variable)
     t_num = t_num[np.isfinite(t_num)]
-    if len(t_num) == 0 or len(control) == 0:
+    if len(t_num) == 0 or control.num_rows == 0:
         return []
     probs = [i / n_bins for i in range(1, n_bins)]
     edges = np.unique(np.quantile(t_num, probs))
-    t_bins = np.digitize(target[variable].to_numpy(dtype=np.float64), edges, right=True)
-    c_bins = np.digitize(control[variable].to_numpy(dtype=np.float64), edges, right=True)
+    t_bins = np.digitize(float_values(target, variable), edges, right=True)
+    c_bins = np.digitize(float_values(control, variable), edges, right=True)
     n_control = len(c_bins)
     n_obs_bins = int(c_bins.max()) + 1 if len(c_bins) else 0
     out = []
@@ -65,3 +67,11 @@ def excess_groups(
         if excess > 0:
             out.append(ExcessGroup(variable, kind, int(b), ts, cs, excess))
     return sorted(out, key=lambda g: g.excess_rows, reverse=True)
+
+
+def _value_counts(values: np.ndarray) -> dict[str, float]:
+    """Label -> relative frequency. NaN keys collapse under `__MISSING__`."""
+    vc = pa.compute.value_counts(pa.array(values, type=pa.string()))
+    pairs = vc.to_pylist()
+    total = sum(int(p["counts"]) for p in pairs) or 1
+    return {p["values"]: int(p["counts"]) / total for p in pairs}

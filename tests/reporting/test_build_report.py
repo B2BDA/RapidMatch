@@ -1,4 +1,4 @@
-import pandas as pd
+import pyarrow as pa
 
 from rapidmatch.balance.checker import BalanceRow
 from rapidmatch.drift.correct import TrimEvent
@@ -6,7 +6,7 @@ from rapidmatch.reporting.report import build_report
 
 
 def test_report_assembles_three_artifacts() -> None:
-    targets = pd.DataFrame(
+    targets = pa.table(
         {
             "match_status": ["matched", "matched", "below_tolerance"],
             "thin_stratum": [False, True, False],
@@ -24,7 +24,19 @@ def test_report_assembles_three_artifacts() -> None:
     report = build_report(targets, cutoff=0.4, before=before, after=after, events=events)
     assert report.coverage["n_matched"] == 2
     assert report.coverage["tolerance_cutoff"] == 0.4
-    assert list(report.balance["variable"]) == ["seg"]
-    assert report.drift_log.iloc[0]["n_removed"] == 2
+    assert report.balance["variable"].to_pylist() == ["seg"]
+    assert report.drift_log["n_removed"].to_pylist() == [2]
     payload = report.to_dict()
     assert "coverage" in payload and "balance" in payload and "drift_log" in payload
+
+
+def test_empty_events_gives_typed_table() -> None:
+    targets = pa.table(
+        {
+            "match_status": ["matched"],
+            "thin_stratum": [False],
+        }
+    )
+    report = build_report(targets, cutoff=0.0, before=[], after=[], events=[])
+    assert report.drift_log.num_rows == 0
+    assert "n_removed" in report.drift_log.column_names

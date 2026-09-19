@@ -14,6 +14,7 @@ No Hungarian algorithm, no ML. Deterministic given the same pair list
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Any, Optional
 
 import numpy as np
 
@@ -23,6 +24,7 @@ def greedy_match(
     control_ids: np.ndarray,
     strengths: np.ndarray,
     n: int = 1,
+    pbar: Optional[Any] = None,
 ) -> list[tuple[int, int, float, int]]:
     """Return (target_id, control_id, strength, match_rank) assignments."""
     if len(target_ids) == 0:
@@ -31,15 +33,20 @@ def greedy_match(
     used_control: set[int] = set()
     target_slots: dict[int, int] = defaultdict(int)
     assigned: list[tuple[int, int, float, int]] = []
-    for i in order:
-        t = int(target_ids[i])
-        c = int(control_ids[i])
-        if c in used_control:
-            continue
-        if target_slots[t] >= n:
-            continue
-        rank = target_slots[t] + 1
-        assigned.append((t, c, float(strengths[i]), rank))
-        target_slots[t] = rank
-        used_control.add(c)
+    if pbar is not None:
+        pbar.total = len(order)
+    for batch_start in range(0, len(order), 4096):
+        for i in order[batch_start : batch_start + 4096]:
+            t = int(target_ids[i])
+            c = int(control_ids[i])
+            if c in used_control:
+                continue
+            if target_slots[t] >= n:
+                continue
+            rank = target_slots[t] + 1
+            assigned.append((t, c, float(strengths[i]), rank))
+            target_slots[t] = rank
+            used_control.add(c)
+        if pbar is not None:
+            pbar.update(min(4096, len(order) - batch_start))
     return assigned

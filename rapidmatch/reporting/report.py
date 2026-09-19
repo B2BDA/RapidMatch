@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
-import pandas as pd
+import pyarrow as pa
 
 from rapidmatch.balance.checker import BalanceRow
 from rapidmatch.drift.correct import TrimEvent
@@ -21,21 +21,21 @@ from rapidmatch.reporting.build_drift_log import build_drift_log
 @dataclass
 class Report:
     coverage: dict[str, Any]
-    balance: pd.DataFrame
-    drift_log: pd.DataFrame
+    balance: pa.Table
+    drift_log: pa.Table
     data_profile: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "coverage": self.coverage,
-            "balance": self.balance.to_dict(orient="records"),
-            "drift_log": self.drift_log.to_dict(orient="records"),
+            "balance": self.balance.to_pylist(),
+            "drift_log": self.drift_log.to_pylist(),
             "data_profile": self.data_profile,
         }
 
 
 def build_report(
-    targets: pd.DataFrame,
+    targets: pa.Table,
     cutoff: float,
     before: Sequence[BalanceRow],
     after: Sequence[BalanceRow],

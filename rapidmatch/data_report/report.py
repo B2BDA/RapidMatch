@@ -49,6 +49,8 @@ class DataReport:
             "COUNT(*)",
             f"SUM(CASE WHEN {tcol} IN (1, 1.0, TRUE) THEN 1 ELSE 0 END)",
             f"SUM(CASE WHEN {tcol} IN (0, 0.0, FALSE) THEN 1 ELSE 0 END)",
+            f"ARRAY_AGG(DISTINCT {tcol}) FILTER (WHERE {tcol} IS NOT NULL)",
+            f"SUM(CASE WHEN {tcol} IS NULL THEN 1 ELSE 0 END)",
         ]
         for name in columns:
             ident = quote_ident(name)
@@ -61,16 +63,20 @@ class DataReport:
         n_rows = int(row[0] or 0)
         n_target = int(row[1] or 0)
         n_control = int(row[2] or 0)
+        treatment_values = [v for v in (row[3] or [])]
+        n_treatment_null = int(row[4] or 0)
         null_counts = {}
         null_rates = {}
         for i, name in enumerate(columns):
-            n_null = int(row[3 + i] or 0)
+            n_null = int(row[5 + i] or 0)
             null_counts[name] = n_null
             null_rates[name] = (n_null / n_rows) if n_rows else 0.0
         return {
             "n_rows": n_rows,
             "n_target": n_target,
             "n_control": n_control,
+            "n_treatment_null": n_treatment_null,
+            "treatment_values": treatment_values,
             "n_numeric": n_numeric,
             "n_categorical": n_categorical,
             "column_types": types,

@@ -4,21 +4,35 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 
 
 def build_coverage_summary(
-    targets: pd.DataFrame,
+    targets: pa.Table,
     cutoff: float,
     n_unmatched: Optional[int] = None,
 ) -> dict[str, Any]:
-    n = int(len(targets))
-    n_matched = int((targets["match_status"] == "matched").sum()) if n else 0
-    n_no = int((targets["match_status"] == "no_control_available").sum()) if n else 0
-    n_below = int((targets["match_status"] == "below_tolerance").sum()) if n else 0
-    if n_unmatched is None:
-        n_unmatched = int((targets["match_status"] == "unmatched").sum()) if n else 0
-    n_thin = int(targets["thin_stratum"].sum()) if n and "thin_stratum" in targets else 0
+    n = targets.num_rows
+    if n:
+        status = targets["match_status"].to_pylist()
+        counts = {
+            s: int(sum(1 for v in status if v == s)) for s in {"matched", "no_control_available", "below_tolerance", "unmatched"}
+        }
+        n_matched = counts["matched"]
+        n_no = counts["no_control_available"]
+        n_below = counts["below_tolerance"]
+        if n_unmatched is None:
+            n_unmatched = counts["unmatched"]
+        if "thin_stratum" in targets.column_names:
+            n_thin = int(pc.sum(targets["thin_stratum"]).as_py() or 0)
+        else:
+            n_thin = 0
+    else:
+        n_matched = n_no = n_below = 0
+        if n_unmatched is None:
+            n_unmatched = 0
+        n_thin = 0
     return {
         "n_target": n,
         "n_matched": n_matched,

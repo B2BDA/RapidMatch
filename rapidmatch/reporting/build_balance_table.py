@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-import pandas as pd
+import pyarrow as pa
 
 from rapidmatch.balance.checker import BalanceRow
 
@@ -12,25 +12,46 @@ from rapidmatch.balance.checker import BalanceRow
 def build_balance_table(
     before: Sequence[BalanceRow],
     after: Sequence[BalanceRow],
-) -> pd.DataFrame:
+) -> pa.Table:
     before_map = {(r.variable, r.role): r for r in before}
     after_map = {(r.variable, r.role): r for r in after}
     keys = list(dict.fromkeys([*before_map, *after_map]))
-    rows = []
+
+    cols = {
+        "variable": [],
+        "role": [],
+        "kind": [],
+        "before": [],
+        "after": [],
+        "threshold": [],
+        "flagged_before": [],
+        "flagged_after": [],
+    }
     for key in keys:
         b = before_map.get(key)
         a = after_map.get(key)
         src = a or b
-        rows.append(
+        cols["variable"].append(src.variable)
+        cols["role"].append(src.role)
+        cols["kind"].append(src.kind)
+        cols["before"].append(None if b is None else b.statistic)
+        cols["after"].append(None if a is None else a.statistic)
+        cols["threshold"].append(src.threshold)
+        cols["flagged_before"].append(None if b is None else b.flagged)
+        cols["flagged_after"].append(None if a is None else a.flagged)
+    return (
+        pa.table(cols)
+        if cols["variable"]
+        else pa.table(
             {
-                "variable": src.variable,
-                "role": src.role,
-                "kind": src.kind,
-                "before": None if b is None else b.statistic,
-                "after": None if a is None else a.statistic,
-                "threshold": src.threshold,
-                "flagged_before": None if b is None else b.flagged,
-                "flagged_after": None if a is None else a.flagged,
+                "variable": pa.array([], type=pa.string()),
+                "role": pa.array([], type=pa.string()),
+                "kind": pa.array([], type=pa.string()),
+                "before": pa.array([], type=pa.float64()),
+                "after": pa.array([], type=pa.float64()),
+                "threshold": pa.array([], type=pa.float64()),
+                "flagged_before": pa.array([], type=pa.bool_()),
+                "flagged_after": pa.array([], type=pa.bool_()),
             }
         )
-    return pd.DataFrame(rows)
+    )

@@ -13,6 +13,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 excel = ["openpyxl>=3.1"]
+progress = ["tqdm>=4.66"]
 
 [build-system]
 requires = ["setuptools>=68"]

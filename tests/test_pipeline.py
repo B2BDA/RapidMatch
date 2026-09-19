@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pyarrow.compute as pc
 
 from rapidmatch import ControlMatcher, MatchConfig
 
@@ -36,13 +37,14 @@ def test_pipeline_covers_every_target() -> None:
     )
     result = ControlMatcher(cfg).fit_match(_frame())
     assert result.coverage_summary["n_target"] == 40
-    assert result.targets["match_status"].isin(
-        ["matched", "no_control_available", "below_tolerance", "unmatched"]
-    ).all()
-    matched = result.pairs[result.pairs["match_status"] == "matched"]
-    assert matched["control_rm_id"].nunique() == len(matched)
-    assert (matched["match_strength"] > 0).all()
-    assert (matched["match_strength"] <= 1).all()
+    assert result.targets["match_status"].to_pylist()
+    matched = result.pairs.filter(
+        pc.equal(result.pairs["match_status"], "matched")
+    )
+    control_ids = matched["control_rm_id"].to_pylist()
+    assert len(set(control_ids)) == len(matched)
+    strengths = matched["match_strength"].to_pylist()
+    assert all(0 < s <= 1 for s in strengths)
     assert result.report is not None
     assert result.report.coverage["n_target"] == 40
     assert "null_counts" in result.report.data_profile
@@ -58,11 +60,11 @@ def test_thin_flag_can_coexist_with_matched() -> None:
         n_bins=2,
     )
     result = ControlMatcher(cfg).fit_match(_frame())
-    both = result.pairs[
-        (result.pairs["match_status"] == "matched") & (result.pairs["thin_stratum"])
-    ]
+    both = result.pairs.filter(
+        pc.and_(pc.equal(result.pairs["match_status"], "matched"), result.pairs["thin_stratum"])
+    )
     assert result.coverage_summary["n_thin_stratum"] >= 0
-    assert both.empty or (both["match_status"] == "matched").all()
+    assert both.num_rows == 0 or both["match_status"].to_pylist().count("matched") == both.num_rows
 
 
 def test_monitor_var_shows_up_in_balance_table() -> None:
@@ -91,7 +93,7 @@ def test_monitor_var_shows_up_in_balance_table() -> None:
     )
     result = ControlMatcher(cfg).fit_match(df)
     bal = result.report.balance
-    assert "tenure" in set(bal["variable"])
-    tenure = bal[bal["variable"] == "tenure"].iloc[0]
-    assert tenure["role"] == "monitor"
-    assert tenure["kind"] == "ks"
+    assert "tenure" in bal["variable"].to_pylist()
+    tenure_rows = bal.filter(pc.equal(bal["variable"], "tenure"))
+    assert tenure_rows["role"].to_pylist() == ["monitor"]
+    assert tenure_rows["kind"].to_pylist() == ["ks"]

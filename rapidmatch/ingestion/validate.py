@@ -45,8 +45,17 @@ def classify_match_vars(
     return numeric, categorical
 
 
-def validate_schema(con: duckdb.DuckDBPyConnection, config: MatchConfig) -> dict[str, str]:
-    """Required columns exist, treatment is binary 0/1, both classes present."""
+def validate_schema(
+    con: duckdb.DuckDBPyConnection,
+    config: MatchConfig,
+    treatment_values: Iterable | None = None,
+) -> dict[str, str]:
+    """Required columns exist, treatment is binary 0/1, both classes present.
+
+    `treatment_values` short-circuits the DISTINCT scan: callers that already
+    collected the treatment column (e.g. the bundled data profile) pass it in
+    so validation adds no extra table scan.
+    """
     types = column_types(con, "udl_data")
     needed = [config.treatment_col, *config.match_vars, *config.monitor_vars]
     if config.id_col:
@@ -55,11 +64,14 @@ def validate_schema(con: duckdb.DuckDBPyConnection, config: MatchConfig) -> dict
     if missing:
         raise ValueError(f"columns not found in input: {missing}")
 
-    tcol = quote_ident(config.treatment_col)
-    distinct = con.execute(
-        f"SELECT DISTINCT {tcol} FROM udl_data WHERE {tcol} IS NOT NULL"
-    ).fetchall()
-    values = {row[0] for row in distinct}
+    if treatment_values is None:
+        tcol = quote_ident(config.treatment_col)
+        distinct = con.execute(
+            f"SELECT DISTINCT {tcol} FROM udl_data WHERE {tcol} IS NOT NULL"
+        ).fetchall()
+        values = {row[0] for row in distinct}
+    else:
+        values = {v for v in treatment_values}
     coerced = set()
     for value in values:
         if value in (0, 0.0, False):

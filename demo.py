@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pyarrow.compute as pc
 
 from rapidmatch import ControlMatcher, MatchConfig
 
@@ -53,19 +54,25 @@ def main() -> None:
         tolerance=0.2,
         min_control_pool_size=3,
         n_bins=4,
+        # Opt-in scaling knobs: serial + no bars by default.
+        n_workers=2,
+        duckdb_threads=4,
+        progress=True,
     )
     result = ControlMatcher(config).fit_match(df)
     print("coverage")
     for key, value in result.coverage_summary.items():
         print(f"  {key}: {value}")
     print("\nstatus counts")
-    print(result.targets["match_status"].value_counts().to_string())
-    print("\nmatched pairs")
-    print(
-        result.pairs.loc[result.pairs["match_status"] == "matched"]
-        .head(10)
-        .to_string(index=False)
-    )
+    statuses = result.targets["match_status"].to_pylist()
+    for status in dict.fromkeys(statuses):
+        print(f"  {status}: {statuses.count(status)}")
+    print("\nmatched pairs (top 10)")
+    pairs = result.pairs
+    matched = pairs.filter(pc.equal(pairs["match_status"], "matched"))
+    cols = ["target_id", "control_id", "match_strength", "match_rank"]
+    for row in matched.select(cols).to_pylist()[:10]:
+        print(row)
 
 
 if __name__ == "__main__":

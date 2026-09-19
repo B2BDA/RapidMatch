@@ -6,6 +6,10 @@ it calls one-job modules in the order locked in plan.md:
     ingest -> data report -> validate -> missingness -> bin/stratify
     -> coverage -> score -> greedy match -> tolerance -> assemble
     -> balance check -> drift trim -> report
+
+Everything below `v_stratified` is pulled into PyArrow (never pandas):
+rows are consumed with zero-copy NumPy views, so a 7M-row run keeps a flat,
+streaming-friendly in-memory footprint.
 """
 
 from __future__ import annotations
@@ -13,21 +17,24 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import numpy as np
+import pyarrow as pa
 
+from rapidmatch._progress import _is_tty, _track, manual_bar
+from rapidmatch._sql import quote_ident
 from rapidmatch.balance.checker import check_balance
 from rapidmatch.binning.stratifier import Stratifier
 from rapidmatch.config import MatchConfig
 from rapidmatch.coverage.flag_coverage import flag_coverage
 from rapidmatch.data_report.report import DataReport
 from rapidmatch.drift.correct import correct_drift
-from rapidmatch.ingestion.data_loader import UniversalDataLoader
 from rapidmatch.ingestion.ingest import ingest
 from rapidmatch.ingestion.validate import classify_match_vars, validate_schema
 from rapidmatch.matching.greedy_match import greedy_match
 from rapidmatch.missingness.handle_missing import handle_missing
 from rapidmatch.output.assemble import MatchResult, assemble
 from rapidmatch.reporting.report import build_report
-from rapidmatch.scoring.scorer import score_pairs, target_moments
+from rapidmatch.scoring.score_strata import score_all_strata
+from rapidmatch.scoring.scorer import target_moments
 from rapidmatch.tolerance.apply_tolerance import apply_tolerance
 
 
@@ -66,36 +73,61 @@ class ControlMatcher:
 
     def _run(self, session) -> MatchResult:
         con = session.con
-        types = validate_schema(con, self.config)
-        numeric, categorical = classify_match_vars(types, self.config.match_vars)
+        cfg = self.config
+        if cfg.duckdb_threads:
+            con.execute(f"SET threads = {cfg.duckdb_threads}")
+        # DuckDB's own progress bar prints ANSI to stderr; keep it terminal-only
+        # (Jupyter gets our tqdm widgets instead, without escape-code noise).
+        if cfg.progress and _is_tty():
+            con.execute("PRAGMA enable_progress_bar")
+            con.execute("PRAGMA progress_bar_time = 100")
 
-        # Lazy object; materialize here because the pipeline is a terminal point.
-        profile = DataReport(con, self.config.treatment_col).summary()
-
-        handle_missing(
-            con,
-            self.config.treatment_col,
-            numeric,
-            categorical,
+        stages = manual_bar(
+            total=10, desc="pipeline", enabled_flag=cfg.progress
         )
+        stage = _track(stages)
+        try:
+            return self._run_stages(con, cfg, stage)
+        finally:
+            # Always close so the final 100% frame is force-rendered: without
+            # this, tqdm's mininterval throttling can leave a fast run's bar
+            # parked at an intermediate percentage (e.g. 90%).
+            stages.close()
 
-        stratifier = Stratifier(n_bins=self.config.n_bins)
+    def _run_stages(self, con, cfg, stage) -> MatchResult:
+        # Lazy object; materialize here because the pipeline is a terminal point.
+        profile = DataReport(con, cfg.treatment_col).summary()
+        stage("profile")
+
+        # Validation reuses the profile's treatment scan: one data pass total.
+        types = validate_schema(
+            con, cfg, treatment_values=profile["treatment_values"]
+        )
+        numeric, categorical = classify_match_vars(types, cfg.match_vars)
+        stage("validate")
+
+        handle_missing(con, cfg.treatment_col, numeric, categorical)
+        stage("missing")
+
+        stratifier = Stratifier(n_bins=cfg.n_bins)
         counts = stratifier.run(con, numeric, categorical)
         self.bin_edges = stratifier.edges
         coverage = flag_coverage(
             counts,
-            min_control_pool_size=self.config.min_control_pool_size,
-            min_control_ratio=self.config.min_control_ratio,
+            min_control_pool_size=cfg.min_control_pool_size,
+            min_control_ratio=cfg.min_control_ratio,
         )
+        stage("stratify")
 
-        table = UniversalDataLoader.duckdb_to_arrow(con, table_name="v_stratified")
-        frame = table.to_pandas()
-        ids = frame["_rm_id"].to_numpy(dtype=np.int64)
-        treatment = frame["_treatment"].to_numpy(dtype=np.int64)
-        strata = frame["_stratum"].astype(str).to_numpy()
+        # Projected pull: only the columns scoring/balance/report need.
+        table = self._pull(con, numeric, categorical)
+
+        ids = table["_rm_id"].to_numpy(zero_copy_only=False).astype(np.int64)
+        treatment = table["_treatment"].to_numpy(zero_copy_only=False).astype(np.int64)
+        strata = table["_stratum"].to_numpy(zero_copy_only=False)
         if numeric:
             x = np.column_stack(
-                [frame[v].to_numpy(dtype=np.float64) for v in numeric]
+                [table[v].to_numpy(zero_copy_only=False).astype(np.float64) for v in numeric]
             )
         else:
             x = np.empty((len(ids), 0), dtype=np.float64)
@@ -103,55 +135,61 @@ class ControlMatcher:
         target_mask = treatment == 1
         mean, std = target_moments(x[target_mask])
 
-        pair_t: list[np.ndarray] = []
-        pair_c: list[np.ndarray] = []
-        pair_s: list[np.ndarray] = []
-        for stratum in coverage.eligible:
-            in_stratum = strata == stratum
-            tm = in_stratum & (treatment == 1)
-            cm = in_stratum & (treatment == 0)
-            t_ids, c_ids, strengths = score_pairs(
-                ids[tm],
-                ids[cm],
-                x[tm],
-                x[cm],
+        eligible = sorted(coverage.eligible)
+        pbar = manual_bar(total=len(eligible), desc="score", enabled_flag=cfg.progress)
+        try:
+            all_t, all_c, all_s = score_all_strata(
+                eligible,
+                strata,
+                ids,
+                treatment,
+                x,
                 numeric,
-                self.config,
+                cfg,
                 mean,
                 std,
+                n_workers=cfg.n_workers,
+                pbar=pbar,
             )
-            if len(t_ids):
-                pair_t.append(t_ids)
-                pair_c.append(c_ids)
-                pair_s.append(strengths)
+        finally:
+            pbar.close()
+        stage("score")
 
-        if pair_t:
-            all_t = np.concatenate(pair_t)
-            all_c = np.concatenate(pair_c)
-            all_s = np.concatenate(pair_s)
-            assignments = greedy_match(all_t, all_c, all_s, n=self.config.n)
+        if len(all_t):
+            gbar = manual_bar(total=len(all_t), desc="match", enabled_flag=cfg.progress)
+            try:
+                assignments = greedy_match(all_t, all_c, all_s, n=cfg.n, pbar=gbar)
+            finally:
+                gbar.close()
         else:
             assignments = []
+        stage("match")
 
-        kept, below, cutoff = apply_tolerance(assignments, self.config.tolerance)
+        kept, below, cutoff = apply_tolerance(assignments, cfg.tolerance)
         self.cutoff = cutoff
+        stage("tolerance")
 
-        no_control_ids = set(ids[target_mask & np.isin(strata, list(coverage.no_control))])
-        thin_ids = set(ids[target_mask & np.isin(strata, list(coverage.thin))])
-        target_frame = frame.loc[frame["_treatment"] == 1].copy()
-        control_frame = frame.loc[frame["_treatment"] == 0].copy()
+        no_control_ids = set(
+            ids[target_mask & np.isin(strata, np.array(sorted(coverage.no_control)))]
+        )
+        thin_ids = set(
+            ids[target_mask & np.isin(strata, np.array(sorted(coverage.thin)))]
+        )
+        target_frame = table.filter(target_mask)
 
         matched_c = {int(c) for _, c, _, _ in kept}
         pair_strength = {int(c): float(s) for _, c, s, _ in kept}
-        matched_control = frame.loc[frame["_rm_id"].isin(matched_c)].copy()
+        matched_control = table.filter(
+            np.isin(ids, np.fromiter(matched_c, dtype=np.int64, count=len(matched_c)))
+        )
         before = check_balance(
             target_frame,
             matched_control,
-            self.config.match_vars,
-            self.config.monitor_vars,
+            cfg.match_vars,
+            cfg.monitor_vars,
             types,
-            js_threshold=self.config.js_threshold,
-            ks_threshold=self.config.ks_threshold,
+            js_threshold=cfg.js_threshold,
+            ks_threshold=cfg.ks_threshold,
         )
         flagged = [row for row in before if row.role == "monitor" and row.flagged]
         correction = correct_drift(
@@ -159,32 +197,41 @@ class ControlMatcher:
             matched_control,
             pair_strength,
             flagged,
-            n_bins=self.config.n_bins,
+            n_bins=cfg.n_bins,
         )
         kept = [a for a in kept if int(a[1]) in correction.kept_control_ids]
-        after_control = frame.loc[
-            frame["_rm_id"].isin(correction.kept_control_ids)
-        ].copy()
+        after_control = table.filter(
+            np.isin(
+                ids,
+                np.fromiter(
+                    correction.kept_control_ids,
+                    dtype=np.int64,
+                    count=len(correction.kept_control_ids),
+                ),
+            )
+        )
         after = check_balance(
             target_frame,
             after_control,
-            self.config.match_vars,
-            self.config.monitor_vars,
+            cfg.match_vars,
+            cfg.monitor_vars,
             types,
-            js_threshold=self.config.js_threshold,
-            ks_threshold=self.config.ks_threshold,
+            js_threshold=cfg.js_threshold,
+            ks_threshold=cfg.ks_threshold,
         )
+        stage("balance")
 
         result = assemble(
-            target_frame=target_frame,
-            control_frame=control_frame,
+            con=con,
             kept=kept,
-            below=below,
+            below={int(i) for i in below},
             no_control_ids={int(i) for i in no_control_ids},
             thin_ids={int(i) for i in thin_ids},
             cutoff=cutoff,
-            id_col=self.config.id_col,
+            id_col=cfg.id_col,
         )
+        stage("assemble")
+
         result.report = build_report(
             result.targets,
             cutoff,
@@ -194,4 +241,19 @@ class ControlMatcher:
             profile,
         )
         result.coverage_summary = result.report.coverage
+        stage("report")
         return result
+
+    def _pull(self, con, numeric, categorical) -> pa.Table:
+        cols = ["_rm_id", "_treatment", "_stratum"]
+        for var in numeric:
+            cols.append(var)
+        for var in categorical:
+            cols.append(var)
+        for var in self.config.monitor_vars:
+            cols.append(var)
+        if self.config.id_col:
+            cols.append(self.config.id_col)
+        cols = list(dict.fromkeys(cols))
+        selected = ", ".join(quote_ident(c) for c in cols)
+        return con.sql(f"SELECT {selected} FROM v_stratified").to_arrow_table()
