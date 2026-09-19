@@ -194,6 +194,21 @@ you matched on (`match_vars`) and the ones you only watch (`monitor_vars`):
 | **JS distance** (Jensen–Shannon) | categorical | target & matched-control distributions drifted apart |
 | **KS statistic** | numeric | largest gap between the two ECDFs |
 
+**What is an ECDF? A staircase.** `ECDF(x)` = *"what fraction of the group is
+at or below x?"* — flat between rows, stepping up `1/n` at each observed value.
+Tenures of the 6 matched controls `[1, 4, 6, 7, 8, 8]`:
+
+| x you check | rows ≤ x | ECDF |
+|-------------|----------|------|
+| `2` | `1` | `1/6 ≈ 0.17` |
+| `5` | `2` | `2/6 ≈ 0.33` |
+| `7` | `4` | `4/6 ≈ 0.67` |
+| `9` | `6` | `6/6 = 1.00` |
+
+**KS = the single tallest vertical gap between the target staircase and the
+matched-control staircase.** Small → the two groups stack up at the same rates
+→ balanced on that monitor var. That's the `0.53` vs `0.11` in Verify.
+
 The example above is categorical (`region`): JS ≈ `0.21` vs. a naive random
 pick's `0.52` — the matched set tracks the target's group mix far more closely.
 
