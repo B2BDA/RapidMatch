@@ -272,38 +272,55 @@ cared about (`match_vars`) and every variable you only watch (`monitor_vars`):
 
 | Kind of column | The number | `0` means | A high value means |
 |----------------|------------|-----------|--------------------|
-| Categories (`region`, `occupation`…) | **JS** | the two mixes are the same | the recipes drifted apart |
-| Numbers (`age`, `income`, `tenure`…) | **KS** | the two groups climb at the same pace | they pull apart somewhere |
+| Categories (`occupation`…) | **JS** | the two mixes are the same | the recipes drifted apart |
+| Numbers (`age`…) | **KS** | the two groups climb at the same pace | they pull apart somewhere |
 
 **Categories — JS, "did the recipe change?"** Imagine each group as a bowl of
-marbles, one color per region. JS is how different the two bowls look:
-`0` = same mix, `1` = nothing in common. In the toy run, matched `region`
-lands at JS ≈ `0.21` versus `0.52` for a random pick of controls — the
+marbles, one color per occupation. JS is how different the two bowls look:
+`0` = same mix, `1` = nothing in common. In the toy run, matched `occupation`
+lands at JS ≈ `0.18` versus `0.41` for a random pick of controls — the
 matched set tracks the target's mix much more closely.
 
 **Numbers — KS, "where do the two lineups drift the most?"** Line both groups
-up from smallest to largest (say tenure in years). Walk along that line and,
+up from smallest to largest (say age in years). Walk along that line and,
 at every value, ask: *what share of the target is at or below this, and what
 share of the matched controls?* KS is the **single biggest gap** between those
 two shares.
 
-A tiny example. Matched-control tenures `[1, 4, 6, 7, 8, 8]`. At tenure `5`,
-only 2 of 6 controls are at or below 5 (about a third). If the target's share
+A tiny example. Matched-control ages `[25, 28, 31, 34, 34, 38]`. At age `30`,
+only 2 of 6 controls are at or below 30 (about a third). If the target's share
 at that same point is very different, that gap counts. KS keeps only the
 **tallest** of those gaps across the whole column. `0` = the groups rise
 together; small = close enough; large = one group is packed low (or high)
 while the other isn't.
 
-That is the `0.53` vs `0.11` on the Verify screen: before matching the
+That is the `0.09` vs `0.47` on the Verify screen: before matching the
 lineups disagree; after matching they almost climb in lockstep.
 
 **5 — Trim control rows that caused monitor drift (weakest matches first).**
 
 If a *monitored* (unmatched-on) group is over-represented after step 4 — say
-matched-tenure rows piled into the `≤ 5y` bucket — RapidMatch trims the matched
-control rows responsible, weakest `match_strength` first, until the group
-rebalances. **This is trim-only**: rows are removed, never re-swapped for a new
-one, so coverage can shrink but the remaining pairs never change identity.
+matched `Analyst` rows piled into the `Analyst` bucket — RapidMatch trims the
+matched control rows responsible, weakest `match_strength` first, until the
+group rebalances. **This is trim-only**: rows are removed, never re-swapped
+for a new one, so coverage can shrink but the remaining pairs never change
+identity.
+
+Here's what trimming looks like. The matched set has 6 pairs, and `Analyst` is
+over-represented (3 controls vs. the target's 1 of 4):
+
+| Match | Target | Control | strength | occupation | action |
+|-------|--------|---------|----------|------------|--------|
+| 1 | T1 | C4 | `0.98` | Engineer | ✅ keep |
+| 2 | T2 | C1 | `0.91` | Analyst | ✅ keep |
+| 3 | T3 | C6 | `0.83` | Manager | ✅ keep |
+| 4 | T5 | C3 | `0.72` | Engineer | ✅ keep |
+| 5 | T4 | C8 | `0.61` | Analyst | ⚠️ trim |
+| 6 | T6 | C9 | `0.55` | Analyst | ⚠️ trim |
+
+RapidMatch drops the weakest Analyst matches first (`0.61`, then `0.55`)
+until the `Analyst` share rebalances to match the target's — strong matches
+for other occupations are never touched.
 
 ```mermaid
 flowchart TD
@@ -342,37 +359,23 @@ flowchart TD
 
 ### `MatchConfig`
 
-```python
-cfg = MatchConfig(
-    match_vars=["income", "age"],    # required
-    treatment_col="is_target",       # required, binary 0/1
-    id_col="id",                     # optional
-    n=1,                             # matches per target row (default 1)
-    tolerance=0.8,                   # global strength quantile [0, 1]
-    min_control_pool_size=5,         # absolute floor per stratum
-    min_control_ratio=None,          # optional ratio * target_count_in_stratum
-    n_bins=4,                        # quantile bins for numeric match_vars
-    weights={"income": 1.5},         # per-variable multipliers (default 1.0)
-    monitor_vars=["tenure"],         # optional
-    js_threshold=0.10,               # optional
-    ks_threshold=0.05,               # optional
-    n_workers=None,                  # optional: parallel per-stratum scoring threads
-    duckdb_threads=None,             # optional: DuckDB execution threads
-    progress=False,                  # optional: progress bars (tqdm extra)
-)
-```
-
-> The three scaling knobs are all **opt-in** and off by default, so behavior is
-> byte-for-byte identical to a serial run with no bars:
->
-> - `n_workers`: score strata on a thread pool. Results are order-preserving and
->   bit-identical to serial, whatever the worker count.
-> - `duckdb_threads`: hand DuckDB's execution thread count to `SET threads`.
-> - `progress`: render live `tqdm` bars — Jupyter widgets inside a notebook,
->   classic stderr bars in a terminal. In a real terminal DuckDB's own query
->   progress bar is enabled too; notebooks get the widgets only (no ANSI
->   noise). With no `progress` extra, on a pipe, or out-of-band, the flag
->   silently no-ops.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `match_vars` | `Sequence[str]` | — *(required)* | Columns used to **stratify** rows into homogeneous groups **and** to score pair distance. Must be non-empty with no duplicates. Cannot overlap `monitor_vars` or `treatment_col`. |
+| `treatment_col` | `str` | — *(required)* | Binary flag: `1` = campaign target, `0` = candidate control. Must contain both values in the data. |
+| `monitor_vars` | `Sequence[str]` | `()` | Columns **watched, not matched on**. JS (categorical) and KS (numeric) balance checked after matching; over-represented groups can be drift-trimmed. Cannot overlap `match_vars`. |
+| `weights` | `Mapping[str, float]` | `{}` | Per-variable distance multipliers on z-scored `match_vars`. Missing keys default to `1.0`. Unknown keys (not in `match_vars`) are rejected. |
+| `n` | `int` | `1` | Controls per target row (1:1 default; 1:n supported). |
+| `tolerance` | `float` | `0.8` | Global strength cutoff `[0, 1]`. Keeps pairs at/above this quantile of accepted strengths. `0` = keep everyone, `1` = only the very best. |
+| `min_control_pool_size` | `int` | `5` | Absolute control floor per stratum. Below this → flagged `thin_stratum`, still matched. |
+| `min_control_ratio` | `Optional[float]` | `None` | Optional ratio floor: effective minimum = `max(min_control_pool_size, ceil(ratio × n_target_in_stratum))`. |
+| `n_bins` | `int` | `4` | Quantile bins for numeric `match_vars`; edges derived from the target group only. Must be ≥ 2. |
+| `id_col` | `Optional[str]` | `None` | Business id copied to output. Internal matching uses `_rm_id`. Cannot be the same as `treatment_col`. |
+| `js_threshold` | `float` | `0.10` | Flag a categorical var when its JS distance exceeds this `[0, 1]`. |
+| `ks_threshold` | `float` | `0.05` | Flag a numeric var when its KS statistic exceeds this `[0, 1]`. |
+| `n_workers` | `Optional[int]` | `None` | Parallel per-stratum scoring threads (≥ 1). Results are order-preserving and bit-identical to serial. |
+| `duckdb_threads` | `Optional[int]` | `None` | DuckDB execution threads (`SET threads = …`). `None` = DuckDB default. |
+| `progress` | `bool` | `False` | Live `tqdm` bars. Requires the `progress` extra (`uv add "rapidmatch[progress]"`). Silently no-ops when the extra is missing or stderr is not a TTY. |
 
 ### `ControlMatcher.fit_match(data)`
 
