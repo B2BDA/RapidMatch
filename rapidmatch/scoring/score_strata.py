@@ -39,15 +39,25 @@ def score_all_strata(
         empty = np.empty(0, dtype=np.int64)
         return empty, empty, np.empty(0, dtype=np.float64)
 
+    wanted = set(strata)
+    target_idx: dict[str, list[int]] = {s: [] for s in wanted}
+    control_idx: dict[str, list[int]] = {s: [] for s in wanted}
+    for i, key in enumerate(strata_labels):
+        if key not in wanted:
+            continue
+        if treatment[i] == 1:
+            target_idx[key].append(i)
+        elif treatment[i] == 0:
+            control_idx[key].append(i)
+
     def _score(stratum: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        in_stratum = strata_labels == stratum
-        tm = in_stratum & (treatment == 1)
-        cm = in_stratum & (treatment == 0)
+        ti = np.asarray(target_idx[stratum], dtype=np.int64)
+        ci = np.asarray(control_idx[stratum], dtype=np.int64)
         return score_pairs(
-            ids[tm],
-            ids[cm],
-            x[tm],
-            x[cm],
+            ids[ti],
+            ids[ci],
+            x[ti],
+            x[ci],
             numeric_vars,
             config,
             target_mean,

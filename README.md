@@ -78,8 +78,8 @@ config = MatchConfig(
     min_control_pool_size=5,
     n_bins=4,
     monitor_vars=["tenure"],         # optional: post-hoc balance checks
-    js_threshold=0.10,               # JS distance flag threshold
-    ks_threshold=0.05,               # KS statistic flag threshold
+    js_threshold=0.10,               # flag if category mixes differ too much
+    ks_threshold=0.05,               # flag if numeric lineups drift too far
 )
 
 result: MatchResult = ControlMatcher(config).fit_match(df)
@@ -111,10 +111,34 @@ Given a dataset with a binary treatment flag, RapidMatch:
 7. **Matches** greedily across all strata — strongest pairs first, a control row
    is never reused (sampling without replacement)
 8. **Filters** by a global match-strength tolerance
-9. **Validates** balance with JS distance (categorical) and KS statistic (numeric)
-   on both match_vars and monitor_vars
+9. **Checks balance:** are the two groups still similar on categories (JS) and
+   numbers (KS), for both match_vars and monitor_vars?
 10. **Trims** control rows responsible for drifted monitor groups (weakest matches first)
 11. **Reports** coverage, balance, drift log, and the data profile
+
+```mermaid
+flowchart TD
+    A["1. Ingest: CSV / Parquet / Excel / table into DuckDB"]
+    B["2. Profile: nulls, types, target vs control counts"]
+    C["3. Validate schema and classify match_vars"]
+    D["4. Missingness: missing only matches missing"]
+    E["5. Bin on the target group, then stratify"]
+    F["6. Flag coverage: no control / thin / eligible"]
+    G["7. Score pairs: global z-score, weighted distance, strength"]
+    H["8. Greedy match: strongest first, no control reused"]
+    I["9. Tolerance: keep pairs at or above the strength cutoff"]
+    J["10. Check balance: JS on categories, KS on numbers"]
+    K{"Monitor var drifted?"}
+    L["Trim weakest matched controls"]
+    M["11. Assemble pairs and targets"]
+    N["12. Report: coverage, balance, drift log"]
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K
+    K -- yes --> L --> J
+    K -- no --> M --> N
+```
+
+Teal-style prep is steps 1–6. Matching and checking are steps 7–12. Thin strata still go through scoring; they are flagged, not dropped.
 
 ### The five matching steps, with a worked example
 
@@ -152,6 +176,61 @@ them on a common scale: `z = (x − mean) / std`, here `(80 − 70)/10 = 1.00`.
 The `tenure = 1.5` weight then says: a one-`std` tenure gap is worth 1.5× a
 one-`std` income gap — your call, applied everywhere.
 
+**How z-scores are calculated (several numeric vars).** This happens
+**once**, before any pair is scored, and only on the **target** group
+(`treatment = 1`). It is **not** parallel — `n_workers` only parallelizes
+later, when each stratum's pairs are scored. For every numeric `match_var`
+independently:
+
+1. `mean` = average of that column among all target rows
+2. `std`  = how spread out that column is among all target rows
+   (if a column is constant, `std` is treated as `1` so we never divide by zero)
+3. Every target **and** control row is then rewritten as
+   `z = (value − mean) / std` using **those same target mean/std**
+
+Example with two numeric vars. Suppose the target group has:
+
+| | income | tenure |
+|--|--------|--------|
+| target mean | `70,000` | `5.0` |
+| target std  | `10,000` | `2.0` |
+| weights     | `1.0` | `1.5` |
+
+A row with income `80,000` and tenure `6` becomes:
+
+- `z_income = (80000 − 70000) / 10000 = 1.00`, then × weight `1.0` → `1.00`
+- `z_tenure = (6 − 5) / 2 = 0.50`, then × weight `1.5` → `0.75`
+
+Do the same for the other person in the pair. Distance is ordinary Euclidean
+on those weighted z's:
+
+`distance = sqrt( (z_income_T − z_income_C)² + (z_tenure_T − z_tenure_C)² )`
+
+Add more numeric `match_vars` the same way: one extra `(Δz × weight)²` inside
+the square root. Categorical `match_vars` do **not** enter this formula —
+they already put the two people in the same stratum (or not). If a stratum
+is categorical-only, every pair in it has distance `0` and strength `1`.
+
+Same mean/std everywhere is the point: a `z = 1` on income means the same
+thing in every stratum, so match strengths can be sorted and cut globally.
+
+**Why not stop at Euclidean distance?** We *do* use ordinary (weighted)
+Euclidean distance — that is the gap. `match_strength = exp(−distance)` does
+not change who is closer than whom. It only **relabels** that gap as a
+familiar 0-to-1 closeness:
+
+- Distance `0` (identical after z-score + weights) → strength `1.0` (“perfect”)
+- Distance `1` → strength `≈ 0.37`
+- Bigger distance → strength slides toward `0`, never negative, never above `1`
+
+Greedy matching and the tolerance cutoff both need one number they can sort
+and threshold *across every stratum*. Raw distance is “smaller is better” and
+has no ceiling (a pair can be arbitrarily far). Strength flips that to
+“bigger is better” and puts every pair on the same 0–1 ruler, so a `0.91` in
+stratum A is comparable to a `0.91` in stratum B. The ranking of pairs is
+exactly the ranking of distances reversed — no extra model, no extra
+information.
+
 **2 — Match greedily, strongest pairs first, across all strata.**
 
 Every pair is scored globally, so a `0.98` pair in stratum A is taken before a
@@ -185,44 +264,38 @@ scored) keeps only assignments at/above it — the threshold `cutoff` is applied
 Weak matches aren't hidden — they're reported as `below_tolerance`, and counted
 in the coverage breakdown.
 
-**4 — Validate balance (JS for categories, KS for numeric), on match_vars
-and monitor_vars.**
+**4 — Check that the matched control still looks like the target.**
 
-Balance is judged with one statistic per variable type, on *both* the variables
-you matched on (`match_vars`) and the ones you only watch (`monitor_vars`):
+After matching, RapidMatch asks a simple question for every variable you
+cared about (`match_vars`) and every variable you only watch (`monitor_vars`):
+*if I compare the two groups, how different are they?* One number per column.
 
-| Statistic | Kinds | What a high value means |
-|-----------|-------|--------------------------|
-| **JS distance** (Jensen–Shannon) | categorical | target & matched-control distributions drifted apart |
-| **KS statistic** (Kolmogorov–Smirnov) | numeric | largest gap between the two ECDFs |
+| Kind of column | The number | `0` means | A high value means |
+|----------------|------------|-----------|--------------------|
+| Categories (`region`, `occupation`…) | **JS** | the two mixes are the same | the recipes drifted apart |
+| Numbers (`age`, `income`, `tenure`…) | **KS** | the two groups climb at the same pace | they pull apart somewhere |
 
-**Read the two statistics with your gut first:**
+**Categories — JS, "did the recipe change?"** Imagine each group as a bowl of
+marbles, one color per region. JS is how different the two bowls look:
+`0` = same mix, `1` = nothing in common. In the toy run, matched `region`
+lands at JS ≈ `0.21` versus `0.52` for a random pick of controls — the
+matched set tracks the target's mix much more closely.
 
-- **JS — "how much did the *recipe* change?"** Hand each group a pile of
-  category marbles (`region`, `occupation`…). JS is one number saying how
-  different the two mixes are: `0` = identical recipe, `1` = nothing in common.
-- **KS — "how big is the tallest gap between the two staircases?"** KS is one
-  number over the whole numeric column: `0` = the groups stack up identically,
-  and small = the matched controls rise at the same rates as the target.
+**Numbers — KS, "where do the two lineups drift the most?"** Line both groups
+up from smallest to largest (say tenure in years). Walk along that line and,
+at every value, ask: *what share of the target is at or below this, and what
+share of the matched controls?* KS is the **single biggest gap** between those
+two shares.
 
-**What is an ECDF (Empirical Cumulative Distribution Function)? A staircase.**
-`ECDF(x)` = *"what fraction of the group is at or below x?"* — flat between
-rows, stepping up `1/n` at each observed value. Tenures of the 6 matched
-controls `[1, 4, 6, 7, 8, 8]`:
+A tiny example. Matched-control tenures `[1, 4, 6, 7, 8, 8]`. At tenure `5`,
+only 2 of 6 controls are at or below 5 (about a third). If the target's share
+at that same point is very different, that gap counts. KS keeps only the
+**tallest** of those gaps across the whole column. `0` = the groups rise
+together; small = close enough; large = one group is packed low (or high)
+while the other isn't.
 
-| x you check | rows ≤ x | ECDF |
-|-------------|----------|------|
-| `2` | `1` | `1/6 ≈ 0.17` |
-| `5` | `2` | `2/6 ≈ 0.33` |
-| `7` | `4` | `4/6 ≈ 0.67` |
-| `9` | `6` | `6/6 = 1.00` |
-
-**KS = the single tallest vertical gap between the target staircase and the
-matched-control staircase.** Small → the two groups stack up at the same rates
-→ balanced on that monitor var. That's the `0.53` vs `0.11` in Verify.
-
-The example above is categorical (`region`): JS ≈ `0.21` vs. a naive random
-pick's `0.52` — the matched set tracks the target's group mix far more closely.
+That is the `0.53` vs `0.11` on the Verify screen: before matching the
+lineups disagree; after matching they almost climb in lockstep.
 
 **5 — Trim control rows that caused monitor drift (weakest matches first).**
 
@@ -246,6 +319,10 @@ flowchart TD
 
 - **Global z-scoring** (not per-stratum), keeping `match_strength` comparable
   across strata for global greedy matching and global tolerance filtering
+- **Distance is still Euclidean.** `match_strength = exp(−distance)` only
+  turns “smaller gap is better” into a 0–1 closeness (`1` = identical, toward
+  `0` = far). Pair ranking is unchanged; the 0–1 scale is what greedy sort
+  and the global tolerance cutoff share across strata.
 - **Bin edges derived from the target group only** — no data leakage from control
 - **`thin_stratum` rows still get matched** but are flagged as lower-confidence
 - **Every target row appears in the output**, labeled via `match_status`
@@ -256,6 +333,10 @@ flowchart TD
 - **Pandas-free engine** — input is ingested to DuckDB, rows are pulled into
   PyArrow, and scoring/balance use zero-copy NumPy views. No intermediate
   `to_pandas()` anywhere in the pipeline
+- **Identity-preserving scoring/matching** — strata are indexed in one forward
+  scan, large distance tensors are scored in target-row chunks, and greedy
+  occupancy uses boolean/int masks. Same pairs, same strengths, less RAM/CPU.
+  Parallel scoring (`n_workers`) stays opt-in and bit-identical to serial.
 
 ## Public API
 
@@ -398,8 +479,9 @@ Tests map 1:1 to step files (plan.md §3a):
 
 - `tests/test_config.py` — validation errors, defaults
 - `tests/test_pipeline.py` — every target covered, thin flag coexists, monitor vars
-- `tests/matching/` — control never reused, n-slots
-- `tests/scoring/` — strength in (0, 1], identical rows → 1.0, parallel == serial
+- `tests/scoring/` — strength in (0, 1], identical rows → 1.0, parallel == serial,
+  chunked distance == full tensor, ineligible strata ignored
+- `tests/matching/` — control never reused, n-slots, gapped 1-based ids
 - `tests/binning/` — bin edges derived from target only
 - `tests/coverage/` — thin strata stay eligible
 - `tests/data_report/` — lazy until `.summary()`, batched counts
@@ -422,8 +504,9 @@ rapidmatch/
 ├── binning/            # Module 5: quantile bins + composite stratum key
 ├── coverage/           # Module 6: no_control / thin / eligible
 ├── scoring/            # Module 7: global z-score + weighted Euclidean distance
-│   └── score_strata.py # order-preserving parallel per-stratum scoring (opt-in)
-├── matching/           # Module 8: global greedy, without replacement
+│   ├── scorer.py       # chunked 3D distance; repeat/tile pair ids
+│   └── score_strata.py # one-scan stratum index; opt-in parallel scoring
+├── matching/           # Module 8: global greedy, boolean-mask occupancy
 ├── tolerance/          # Module 9: global strength percentile cutoff
 ├── output/             # Module 10: DuckDB-backed MatchResult roll-up
 ├── balance/            # Module 11: JS / KS balance validation (Arrow-backed)
@@ -436,6 +519,8 @@ tests/                  # 1:1 test coverage for each step
 
 - `plan.md` — the locked product design (source of truth, all 14 modules)
 - `codegraph.md` — the running-code map for LLMs and contributors
+- `docs/superpowers/specs/2026-09-20-identity-preserving-speed-pack-design.md`
+- `docs/superpowers/plans/2026-09-20-identity-preserving-speed-pack.md`
 
 ## License
 

@@ -23,3 +23,13 @@ def test_n_slots() -> None:
     assigned = greedy_match(target_ids, control_ids, strengths, n=1)
     assert len(assigned) == 1
     assert assigned[0][1] == 8
+
+
+def test_gapped_one_based_ids() -> None:
+    target_ids = np.array([10, 20, 10])
+    control_ids = np.array([100, 100, 30])
+    strengths = np.array([0.9, 0.8, 0.7])
+    assigned = greedy_match(target_ids, control_ids, strengths, n=2)
+    assert (10, 100, 0.9, 1) in assigned
+    assert (10, 30, 0.7, 2) in assigned
+    assert (20, 100, 0.8, 1) not in assigned

@@ -52,3 +52,17 @@ def test_empty_strata_returns_empty() -> None:
     mean, std = np.array([0.0]), np.array([1.0])
     t, c, s = score_all_strata([], strata, ids, treatment, x, ["x"], cfg, mean, std)
     assert len(t) == len(c) == len(s) == 0
+
+
+def test_ineligible_stratum_is_ignored() -> None:
+    ids = np.array([1, 2, 3, 4], dtype=np.int64)
+    treatment = np.array([1, 0, 1, 0], dtype=np.int64)
+    strata = np.array(["keep", "keep", "drop", "drop"])
+    x = np.array([[0.0], [0.0], [9.0], [9.0]])
+    cfg = MatchConfig(match_vars=["x"], treatment_col="t")
+    mean, std = np.array([0.0]), np.array([1.0])
+    t, c, _ = score_all_strata(
+        ["keep"], strata, ids, treatment, x, ["x"], cfg, mean, std
+    )
+    np.testing.assert_array_equal(t, np.array([1]))
+    np.testing.assert_array_equal(c, np.array([2]))

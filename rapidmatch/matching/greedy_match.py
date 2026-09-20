@@ -13,7 +13,6 @@ No Hungarian algorithm, no ML. Deterministic given the same pair list
 
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any, Optional
 
 import numpy as np
@@ -30,8 +29,9 @@ def greedy_match(
     if len(target_ids) == 0:
         return []
     order = np.argsort(-strengths, kind="mergesort")
-    used_control: set[int] = set()
-    target_slots: dict[int, int] = defaultdict(int)
+    max_id = int(max(int(target_ids.max()), int(control_ids.max())))
+    used_control = np.zeros(max_id + 1, dtype=bool)
+    target_slots = np.zeros(max_id + 1, dtype=np.int32)
     assigned: list[tuple[int, int, float, int]] = []
     if pbar is not None:
         pbar.total = len(order)
@@ -39,14 +39,14 @@ def greedy_match(
         for i in order[batch_start : batch_start + 4096]:
             t = int(target_ids[i])
             c = int(control_ids[i])
-            if c in used_control:
+            if used_control[c]:
                 continue
             if target_slots[t] >= n:
                 continue
-            rank = target_slots[t] + 1
+            rank = int(target_slots[t]) + 1
             assigned.append((t, c, float(strengths[i]), rank))
             target_slots[t] = rank
-            used_control.add(c)
+            used_control[c] = True
         if pbar is not None:
             pbar.update(min(4096, len(order) - batch_start))
     return assigned

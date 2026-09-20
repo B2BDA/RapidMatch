@@ -17,6 +17,8 @@ import numpy as np
 
 from rapidmatch.config import MatchConfig
 
+_MAX_DISTANCE_CELLS = 16_000_000
+
 
 def score_pairs(
     target_ids: np.ndarray,
@@ -36,28 +38,54 @@ def score_pairs(
         empty = np.empty(0, dtype=np.int64)
         return empty, empty, np.empty(0, dtype=np.float64)
 
+    n_t = len(target_ids)
+    n_c = len(control_ids)
     weights = np.array([config.weight_for(v) for v in numeric_vars], dtype=np.float64)
     # Constant columns would divide by zero; treat them as already standardized.
     std = np.where(target_std == 0, 1.0, target_std)
     zt = (target_x - target_mean) / std
     zc = (control_x - target_mean) / std
-    if weights.size:
-        zt = zt * weights
-        zc = zc * weights
+    if not weights.size:
+        # Categorical-only strata: every pair in the cell is equally close.
+        dist = np.zeros((n_t, n_c), dtype=np.float64)
+        strength = np.exp(-dist)
+        return (
+            np.repeat(target_ids, n_c),
+            np.tile(control_ids, n_t),
+            strength.ravel(),
+        )
+
+    zt = zt * weights
+    zc = zc * weights
+    n_dim = int(zt.shape[1])
+    block_t = n_t
+    if n_t * n_c * n_dim > _MAX_DISTANCE_CELLS:
+        block_t = max(1, _MAX_DISTANCE_CELLS // (n_c * max(n_dim, 1)))
+
+    if block_t >= n_t:
         delta = zt[:, None, :] - zc[None, :, :]
         dist = np.sqrt(np.sum(delta * delta, axis=2))
-    else:
-        # Categorical-only strata: every pair in the cell is equally close.
-        dist = np.zeros((len(target_ids), len(control_ids)), dtype=np.float64)
-    strength = np.exp(-dist)
+        return (
+            np.repeat(target_ids, n_c),
+            np.tile(control_ids, n_t),
+            np.exp(-dist).ravel(),
+        )
 
-    t_idx, c_idx = np.meshgrid(
-        np.arange(len(target_ids)), np.arange(len(control_ids)), indexing="ij"
-    )
+    t_parts: list[np.ndarray] = []
+    c_parts: list[np.ndarray] = []
+    s_parts: list[np.ndarray] = []
+    for start in range(0, n_t, block_t):
+        end = min(start + block_t, n_t)
+        zt_block = zt[start:end]
+        delta = zt_block[:, None, :] - zc[None, :, :]
+        dist = np.sqrt(np.sum(delta * delta, axis=2))
+        t_parts.append(np.repeat(target_ids[start:end], n_c))
+        c_parts.append(np.tile(control_ids, end - start))
+        s_parts.append(np.exp(-dist).ravel())
     return (
-        target_ids[t_idx.ravel()],
-        control_ids[c_idx.ravel()],
-        strength.ravel(),
+        np.concatenate(t_parts),
+        np.concatenate(c_parts),
+        np.concatenate(s_parts),
     )
 
 

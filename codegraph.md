@@ -76,17 +76,21 @@ rapidmatch/
   coverage/
     flag_coverage.py          Module 6  no_control / thin / eligible
   scoring/
-    scorer.py                 Module 7  global z-score, weighted Euclidean, exp(-d)
+    scorer.py                 Module 7  global z-score, weighted Euclidean, exp(-d);
+                                        chunked 3D distance; repeat/tile pair ids
+    score_strata.py           one forward scan into per-stratum slices;
+                              opt-in ThreadPoolExecutor, order-preserving
   matching/
-    greedy_match.py           Module 8  global sort + walk, no replacement
+    greedy_match.py           Module 8  global sort + walk, no replacement;
+                                        boolean/int occupancy masks on _rm_id
   tolerance/
     apply_tolerance.py        Module 9  global strength quantile cutoff
   output/
     assemble.py               Module 10 MatchResult tables + coverage_summary
   balance/
-    checker.py                Module 11 orchestrator (JS/KS vs thresholds)
-    js_distance.py            categorical Jensen-Shannon divergence
-    ks_statistic.py           numeric two-sample KS statistic
+    checker.py                Module 11 orchestrator (balance vs thresholds)
+    js_distance.py            categories: how different are the two mixes?
+    ks_statistic.py           numbers: biggest gap between the two sorted lineups
   drift/
     diagnose.py               over-represented categories/bins vs target share
     correct.py                Module 12 trim-only, weakest matches first
@@ -109,8 +113,9 @@ one caller.
 
 ## 4. Runtime data flow
 
-DuckDB views are the source of truth until scoring. Then a stratum-scoped
-Arrow/pandas subset is pulled for NumPy.
+DuckDB views are the source of truth until scoring. Then `v_stratified` is
+pulled as a PyArrow table (`pipeline._pull`); scoring uses zero-copy NumPy
+views, never pandas.
 
 ```mermaid
 flowchart TD
@@ -121,8 +126,8 @@ flowchart TD
     D["handle_missing -> v_prepared"]
     E["Stratifier.run -> v_stratified + counts"]
     F["flag_coverage: no_control / thin / eligible"]
-    G["duckdb_to_arrow v_stratified"]
-    H["score_pairs per eligible stratum"]
+    G["_pull v_stratified to Arrow"]
+    H["score_all_strata then score_pairs"]
     I["greedy_match global pool"]
     J["apply_tolerance"]
     K["assemble MatchResult"]
@@ -166,7 +171,8 @@ Internal columns (`_rm_id`, `_treatment`, `_stratum`, `_bin_*`,
 - Frozen dataclass. Validation errors name the bad field.
 - `match_vars` and `monitor_vars` must not overlap.
 - Weight keys must be a subset of `match_vars`.
-- `monitor_vars` are accepted but unused in the MVP (reserved for modules 11-13).
+- `n_workers` / `duckdb_threads` / `progress` are opt-in; default serial path
+  is bit-identical to a run with those knobs unset.
 
 ### Module 4 — missingness (`missingness/handle_missing.py`)
 
@@ -188,19 +194,30 @@ Internal columns (`_rm_id`, `_treatment`, `_stratum`, `_bin_*`,
 - Decision locked for MVP: **thin strata are still matched, flagged**.
 - `thin_stratum` is a boolean on the output, not a `match_status` value.
 
-### Module 7 — scoring (`scoring/scorer.py`)
+### Module 7 — scoring (`scoring/scorer.py`, `scoring/score_strata.py`)
 
 - Mean/std of numeric match_vars computed **once on the whole target group**.
+- `score_all_strata` indexes rows in **one forward scan**, then scores only
+  keys in `eligible` (appearance order inside each stratum).
 - Per eligible stratum: all target x control pairs.
+- Distance is still `sqrt(sum(delta^2))` on a `(n_target, n_control, n_dim)`
+  tensor. If that tensor would exceed `_MAX_DISTANCE_CELLS` (16e6), score
+  target-row blocks against all controls and concatenate. Never chunk on
+  the control axis. Categorical-only is not chunked.
+- Pair ids use `repeat`/`tile` (target-major, control inner) — same order as
+  the old `meshgrid(..., indexing="ij")`.
 - `match_strength = exp(-weighted_euclidean(z))`, bounded `(0, 1]`.
 - Identical rows (after z-score + weight) have strength 1.0.
 - Categorical-only stratum: distance 0, strength 1 for every pair in the cell.
+- `n_workers > 1` uses `ThreadPoolExecutor.map`; output is bit-identical to serial.
 
 ### Module 8 — matching (`matching/greedy_match.py`)
 
 - Concatenate every stratum's pairs into one list.
 - Sort strength descending (`mergesort` = stable ties).
 - Walk: assign if control unused and target has an open slot of `n`.
+- Occupancy is a boolean mask / int32 slot array sized `max(_rm_id)+1`
+  (`_rm_id` is dense 1-based `ROW_NUMBER()`). Not a Python `set`.
 - A control row is used at most once, ever.
 
 ### Module 9 — tolerance (`tolerance/apply_tolerance.py`)
@@ -239,10 +256,9 @@ fit_match(data)
       stratum_key_sql
       get_stratum_counts
     flag_coverage(counts, ...)                # Coverage
-    UniversalDataLoader.duckdb_to_arrow(...)  # pandas frame
+    _pull(con, numeric, categorical)          # Arrow table from v_stratified
     target_moments(x[target])                 # global mean/std
-    for stratum in coverage.eligible:
-      score_pairs(...)                        # ids + strengths
+    score_all_strata(eligible, ..., n_workers)
     greedy_match(all pairs, n)
     apply_tolerance(assignments, tolerance)
     check_balance(...)                        # before JS/KS
@@ -300,8 +316,9 @@ python3 demo.py
 
 Key tests:
 
-- `tests/matching/test_greedy_match.py` — control never reused; n-slots
-- `tests/scoring/test_scorer.py` — strength bounds; identical -> 1.0
+- `tests/matching/test_greedy_match.py` — control never reused; n-slots; gapped ids
+- `tests/scoring/test_scorer.py` — strength bounds; identical -> 1.0; chunk == full tensor
+- `tests/scoring/test_score_strata.py` — parallel == serial; ineligible strata ignored
 - `tests/binning/test_compute_bin_edges.py` — edges ignore huge control outliers
 - `tests/coverage/test_flag_coverage.py` — thin stays eligible
 - `tests/test_pipeline.py` — every target accounted for; no reused control; report attached

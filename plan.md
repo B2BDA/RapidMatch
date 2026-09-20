@@ -63,7 +63,7 @@ only (no PySpark), and is simpler as a result.
 | Uncovered target rows | Kept in output, not silently dropped, labeled via `match_status` |
 | Min control pool per stratum | `min_control_pool_size` (default `5`, absolute floor) and optional `min_control_ratio` (control candidates required per target row in that stratum). Effective minimum = `max(min_control_pool_size, ceil(min_control_ratio × target_count_in_stratum))` when a ratio is given, else just the flat floor. Strata below this are labeled `thin_stratum` — separate from `no_control_available` (which means literally zero candidates). **Locked:** `thin_stratum` rows still proceed through matching and are flagged via a boolean that can co-occur with `matched` |
 | Variable roles | `match_vars` (stratify + distance) vs. `monitor_vars` (post-hoc balance check only, not used to match) |
-| Balance metrics | JS distance (categorical), KS statistic (numeric) — computed for both `match_vars` (sanity check) and `monitor_vars` (primary use) |
+| Balance metrics | After matching, one number per column asking "do the two groups still look alike?" Categories: JS (mix / recipe; 0 = identical, 1 = nothing in common). Numbers: KS (biggest gap between the two sorted lineups). Both run on `match_vars` (sanity) and `monitor_vars` (primary) |
 | Drift correction | If a `monitor_var` is flagged post-hoc, identify the specific over-represented rows/groups causing it and trim them from control |
 
 ## 3a. Code structure & modularity
@@ -167,12 +167,16 @@ Code: `rapidmatch/coverage/flag_coverage.py`.
 - [x] **Locked:** `thin_stratum` rows still proceed through matching and are flagged as lower-confidence (`thin_stratum` boolean, can co-occur with `matched`)
 
 ### Module 7 — Scoring
-Code: `rapidmatch/scoring/scorer.py`. Production path is NumPy on the Arrow pull from `v_stratified`.
+Code: `rapidmatch/scoring/scorer.py`, `rapidmatch/scoring/score_strata.py`. Production path is NumPy on the Arrow pull from `v_stratified`.
 - [x] Compute mean/std per numeric `match_var` **globally** across the target group (not per stratum)
 - [x] Apply global z-score standardization to numeric `match_vars` on both target and control rows
 - [x] Apply user weight dict (default 1) per variable to the standardized (z-scored) values
 - [x] Compute weighted Euclidean distance for every valid target–control pair within a stratum
 - [x] Transform distance → `match_strength = exp(-distance)` — confirmed bounded in (0,1]
+- [x] Identity-preserving speed: one forward scan into per-stratum slices; large 3D
+      distance tensors scored in target-row chunks (`_MAX_DISTANCE_CELLS = 16e6`);
+      pair ids via `repeat`/`tile` (same order as the old meshgrid). Bit-identical
+      strengths. `n_workers` remains opt-in and order-preserving.
 
 ### Module 8 — Matching (global greedy, without replacement)
 Code: `rapidmatch/matching/greedy_match.py`.
@@ -180,6 +184,8 @@ Code: `rapidmatch/matching/greedy_match.py`.
 - [x] Sort globally by `match_strength` descending
 - [x] Walk the sorted list; assign a pair only if the target row has an open slot (of `n`) and the control row is unused; otherwise skip — no control row reused
 - [x] Support `n` > 1 via per-target virtual slots — unit-tested at n=1 and n=2
+- [x] Occupancy is a boolean / int32 mask of length `max(_rm_id)+1` (dense 1-based
+      ids), not a Python `set`. Same walk, same assignments.
 
 ### Module 9 — Tolerance filtering
 Code: `rapidmatch/tolerance/apply_tolerance.py`.
@@ -193,7 +199,12 @@ Code: `rapidmatch/output/assemble.py` (`MatchResult`).
 
 ### Module 11 — Post-hoc balance validation
 Code: `rapidmatch/balance/` (`checker.py`, `js_distance.py`, `ks_statistic.py`).
-- [x] JS distance (categorical) / KS statistic (numeric) between matched control and target, for both `match_vars` (sanity check — should already be tight) and `monitor_vars` (primary check)
+- [x] After matching, one number per column: are the two groups still similar?
+      Categories use JS ("did the mix / recipe change?" — 0 = same, 1 = nothing
+      in common). Numbers use KS ("where do the two sorted lineups drift the
+      most?" — the single biggest gap in the share of each group at or below
+      each value). Computed for `match_vars` (sanity — should already be tight)
+      and `monitor_vars` (primary check)
 - [x] Flag columns exceeding threshold (JS > 0.10, KS > 0.05, configurable via `js_threshold` / `ks_threshold`)
 
 ### Module 12 — Drift diagnosis & correction
@@ -386,3 +397,8 @@ deterministic, and easy to explain to a non-technical stakeholder.
 - **Renamed RapidSampler (RaSe) → RapidMatch (RiMatch).** Pronounced "rematch".
   Import package `rapidmatch`. Package directory, `pyproject.toml`, imports,
   `plan.md`, `codegraph.md`, `demo.py`, and `demo.ipynb` all updated.
+- **Identity-preserving speed pack.** Rewrite of scoring index (one forward
+  scan into per-stratum slices), pair materialization (chunked 3D distance,
+  `repeat`/`tile` instead of `meshgrid`), and greedy occupancy (boolean/int
+  masks instead of `set`/`defaultdict`). Same algorithm, same public API,
+  bit-identical `match_strength` and assignments. No new dependency.
