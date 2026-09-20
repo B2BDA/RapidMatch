@@ -525,6 +525,44 @@ tests/                  # 1:1 test coverage for each step
 - `docs/superpowers/specs/2026-09-20-identity-preserving-speed-pack-design.md`
 - `docs/superpowers/plans/2026-09-20-identity-preserving-speed-pack.md`
 
+## FAQ
+
+**Is `monitor_vars` optional?**
+
+Yes — it defaults to `()`. If you leave it out, balance checks (JS/KS) still run on your `match_vars`, but no drift trimming happens. Drift trimming only targets `monitor_vars`.
+
+**Can `monitor_vars` overlap with `match_vars`?**
+
+No — the validation rejects it. `match_vars` play an active role (stratify + score distance), while `monitor_vars` are passive (watch only). The same variable in both would be redundant.
+
+**Can I monitor and trim on `match_vars` for better controls?**
+
+Not by design. `match_vars` are already optimized by construction — stratification bins them, scoring ranks pairs on them, and greedy matching picks the closest. Trimming on them would remove your best matches on those variables, shrinking coverage without a clear causal benefit. If you want trimming to happen on a variable, add it as a `monitor_var` instead.
+
+**Why is pandas optional?**
+
+All matching, transformation, and scoring runs on DuckDB + PyArrow + NumPy. Pandas is only used to *build* the input or to consume an output via `table.to_pandas()`. Multi-million-row inputs stay memory-safe without pandas materializing an intermediate copy.
+
+**How does `tolerance` work?**
+
+After all pairs are scored, `tolerance` sets a global strength quantile. Default `0.8` keeps the top 20% of accepted strengths. `0` = keep everyone, `1` = only the very best. The cutoff is applied across all strata at once, keeping match strength comparable everywhere.
+
+**What happens if a stratum has no controls?**
+
+The stratum is flagged `no_control_available`. Targets in that stratum appear in the output with zero matches — RapidMatch never invents controls.
+
+**How do `weights` work?**
+
+Weights multiply the z-scored distance for each numeric `match_var`. Default `1.0` (no effect). `weights={"income": 1.5}` means a one-`std` income gap is worth 1.5× a one-`std` gap on any other variable. Unknown keys (not in `match_vars`) are rejected.
+
+**What is `thin_stratum`?**
+
+A stratum flagged when its control pool is below `min_control_pool_size` (or `min_control_ratio`). Thin strata are still matched — they're flagged, not dropped. The flag appears on the `pairs` and `targets` tables as a separate boolean.
+
+**Can I run this in parallel?**
+
+Yes — set `n_workers` to the number of threads you want (≥ 1). Results are order-preserving and bit-identical to serial. DuckDB execution threads are controlled separately via `duckdb_threads`.
+
 ## License
 
 Copyright © RapidMatch contributors
