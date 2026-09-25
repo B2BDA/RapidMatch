@@ -94,7 +94,21 @@ print({s: statuses.count(s) for s in dict.fromkeys(statuses)})
 pairs = result.pairs
 matched = pairs.filter(pc.equal(pairs["match_status"], "matched"))
 print(matched.select(["target_id", "control_id", "match_strength"]).to_pylist()[:10])
+
+# The control group = unique control_id values that survived matching.
+# control_id is your id_col (or the internal _rm_id if you omitted id_col).
+control_ids = set(matched["control_id"].to_pylist())
+control_rows = df[df["id"].isin(control_ids)]
 ```
+
+`result.pairs` is one row per pair, not the original table. Join those ids
+back onto your input to get the actual control rows.
+
+| column | meaning |
+|--------|---------|
+| `target_id` / `control_id` | Your `id_col` if you set one; otherwise RapidMatch's internal `_rm_id` |
+| `target_rm_id` / `control_rm_id` | Always the internal 1-based row number (`ROW_NUMBER()` at ingest). Use this only if you kept the DuckDB file (`keep_db=True`) and join on `_rm_id`. |
+
 
 ## How It Works
 
@@ -401,7 +415,8 @@ flowchart TD
 | `ks_threshold` | `float` | `0.05` | Flag a numeric var when its KS statistic exceeds this `[0, 1]`. |
 | `n_workers` | `Optional[int]` | `None` | Parallel per-stratum scoring threads (≥ 1). Results are order-preserving and bit-identical to serial. |
 | `duckdb_threads` | `Optional[int]` | `None` | DuckDB execution threads (`SET threads = …`). `None` = DuckDB default. |
-| `progress` | `bool` | `False` | Live `tqdm` bars. Requires the `progress` extra (`uv add "rapidmatch[progress]"`). Silently no-ops when the extra is missing or stderr is not a TTY. |
+| `progress` | `bool` | `False` | Live `tqdm` bars. Requires the `progress` extra (`uv add "rapidmatch[progress]"`). Silently no-ops when the extra is missing or stderr is not a TTY. Independent of `verbose`. |
+| `verbose` | `bool` | `False` | Timestamped stage lines on stderr: config, target vs untreated counts, strata formed, RSS, elapsed time, live assigned-control count during greedy, then kept counts after tolerance and drift. Independent of `progress`. Default off. |
 
 ### `ControlMatcher.fit_match(data)`
 
@@ -415,7 +430,7 @@ flowchart TD
 
 | Attribute | Description |
 |-----------|-------------|
-| `pairs` | PyArrow Table (pair-level) with `target_id`, `control_id`, `stratum`, `match_strength`, `match_rank`, `match_status`, `thin_stratum` |
+| `pairs` | PyArrow Table (pair-level) with `target_id`, `control_id`, `target_rm_id`, `control_rm_id`, `stratum`, `match_strength`, `match_rank`, `match_status`, `thin_stratum` |
 | `targets` | PyArrow Table, one row per target: `match_status`, `n_matches`, `thin_stratum`, `best_strength` |
 | `cutoff` | The strength quantile actually applied |
 | `coverage_summary` | Counts and percent matched / no control / below tolerance |
@@ -586,6 +601,21 @@ Weights multiply the z-scored distance for each numeric `match_var`. Default `1.
 **What is `thin_stratum`?**
 
 A stratum flagged when its control pool is below `min_control_pool_size` (or `min_control_ratio`). Thin strata are still matched — they're flagged, not dropped. The flag appears on the `pairs` and `targets` tables as a separate boolean.
+
+**How do I get the final control-group rows?**
+
+Filter `result.pairs` to `match_status == "matched"`, take unique `control_id`s,
+then filter your original table on `id_col`. `control_id` is your business id
+when you set `id_col`; otherwise it is the internal `_rm_id`. `control_rm_id`
+is always that internal row number — only needed if you kept the DuckDB file.
+
+**What is `verbose`?**
+
+`verbose=True` prints stage lines to stderr while `fit_match` runs (config,
+how many targets vs untreated, how many strata, RSS, times, a live assigned
+control count during greedy matching, then kept counts after tolerance and
+drift). `progress=True` is the tqdm bars. They are independent; default for
+both is off.
 
 **Can I run this in parallel?**
 

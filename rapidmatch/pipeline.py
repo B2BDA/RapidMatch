@@ -21,6 +21,7 @@ import pyarrow as pa
 
 from rapidmatch._progress import _is_tty, _track, manual_bar
 from rapidmatch._sql import quote_ident
+from rapidmatch._verbose import VerboseLog, rss_mb
 from rapidmatch.balance.checker import check_balance
 from rapidmatch.binning.stratifier import Stratifier
 from rapidmatch.config import MatchConfig
@@ -86,17 +87,35 @@ class ControlMatcher:
             total=10, desc="pipeline", enabled_flag=cfg.progress
         )
         stage = _track(stages)
+        log = VerboseLog(enabled=cfg.verbose)
         try:
-            return self._run_stages(con, cfg, stage)
+            return self._run_stages(con, cfg, stage, log)
         finally:
             # Always close so the final 100% frame is force-rendered: without
             # this, tqdm's mininterval throttling can leave a fast run's bar
             # parked at an intermediate percentage (e.g. 90%).
             stages.close()
 
-    def _run_stages(self, con, cfg, stage) -> MatchResult:
+    def _run_stages(self, con, cfg, stage, log) -> MatchResult:
         # Lazy object; materialize here because the pipeline is a terminal point.
+        rss = rss_mb()
+        log.emit(
+            "start",
+            n=cfg.n,
+            tolerance=cfg.tolerance,
+            n_bins=cfg.n_bins,
+            n_workers=cfg.n_workers,
+            max_candidates=cfg.max_candidates_per_target,
+            rss_mb=None if rss is None else round(rss, 1),
+        )
         profile = DataReport(con, cfg.treatment_col).summary()
+        log.emit(
+            "profile",
+            rows=profile["n_rows"],
+            target=profile["n_target"],
+            untreated=profile["n_control"],
+            rss_mb=None if rss_mb() is None else round(rss_mb(), 1),
+        )
         stage("profile")
 
         # Validation reuses the profile's treatment scan: one data pass total.
@@ -117,10 +136,23 @@ class ControlMatcher:
             min_control_pool_size=cfg.min_control_pool_size,
             min_control_ratio=cfg.min_control_ratio,
         )
+        log.emit(
+            "stratify",
+            strata=len(counts),
+            eligible=len(coverage.eligible),
+            no_control=len(coverage.no_control),
+            thin=len(coverage.thin),
+        )
         stage("stratify")
 
         # Projected pull: only the columns scoring/balance/report need.
         table = self._pull(con, numeric, categorical)
+        rss = rss_mb()
+        log.emit(
+            "pull",
+            rows=len(table),
+            rss_mb=None if rss is None else round(rss, 1),
+        )
 
         ids = table["_rm_id"].to_numpy(zero_copy_only=False).astype(np.int64)
         treatment = table["_treatment"].to_numpy(zero_copy_only=False).astype(np.int64)
@@ -153,20 +185,39 @@ class ControlMatcher:
             )
         finally:
             pbar.close()
+        rss = rss_mb()
+        log.emit(
+            "score",
+            pairs=len(all_t),
+            eligible_strata=len(eligible),
+            rss_mb=None if rss is None else round(rss, 1),
+        )
         stage("score")
+
+        def _match_tick(n_assigned: int, n_seen: int) -> None:
+            log.rewrite("match", assigned=n_assigned, pairs_seen=n_seen)
 
         if len(all_t):
             gbar = manual_bar(total=len(all_t), desc="match", enabled_flag=cfg.progress)
             try:
-                assignments = greedy_match(all_t, all_c, all_s, n=cfg.n, pbar=gbar)
+                assignments = greedy_match(
+                    all_t, all_c, all_s, n=cfg.n, pbar=gbar, on_progress=_match_tick
+                )
             finally:
                 gbar.close()
         else:
             assignments = []
+        log.emit("match", assigned=len(assignments), pairs=len(all_t))
         stage("match")
 
         kept, below, cutoff = apply_tolerance(assignments, cfg.tolerance)
         self.cutoff = cutoff
+        log.emit(
+            "tolerance",
+            kept=len(kept),
+            below=len(below),
+            cutoff=round(float(cutoff), 4),
+        )
         stage("tolerance")
 
         no_control_ids = set(
@@ -200,6 +251,11 @@ class ControlMatcher:
             n_bins=cfg.n_bins,
         )
         kept = [a for a in kept if int(a[1]) in correction.kept_control_ids]
+        log.emit(
+            "drift",
+            kept=len(kept),
+            trimmed=sum(e.n_removed for e in correction.events),
+        )
         after_control = table.filter(
             np.isin(
                 ids,
@@ -242,6 +298,12 @@ class ControlMatcher:
         )
         result.coverage_summary = result.report.coverage
         stage("report")
+        log.emit(
+            "done",
+            matched=result.coverage_summary.get("n_matched"),
+            controls=len(kept),
+            pct_matched=result.coverage_summary.get("pct_matched"),
+        )
         return result
 
     def _pull(self, con, numeric, categorical) -> pa.Table:

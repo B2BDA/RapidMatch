@@ -29,6 +29,7 @@ def test_defaults() -> None:
     assert cfg.n_workers is None
     assert cfg.duckdb_threads is None
     assert cfg.progress is False
+    assert cfg.verbose is False
 
 
 def test_rejects_invalid_parallel_knobs() -> None:

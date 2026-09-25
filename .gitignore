@@ -121,6 +121,7 @@
 **/tmp/
 **/temp/
 *.parquet
+*.db*
 
 # Dart
 **/.dart_tool/

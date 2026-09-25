@@ -47,6 +47,9 @@ class MatchConfig:
         duckdb_threads: DuckDB execution threads, or None for DuckDB default.
         progress: Show terminal-only progress bars (requires tqdm installed
             via the `progress` extra and a TTY stderr).
+        verbose: Print timestamped stage lines to stderr (config, stratum
+            counts, RSS, elapsed time, live assigned-control count). Independent
+            of `progress`. Default False.
     """
 
     match_vars: Sequence[str]
@@ -65,6 +68,7 @@ class MatchConfig:
     n_workers: Optional[int] = None
     duckdb_threads: Optional[int] = None
     progress: bool = False
+    verbose: bool = False
 
     def __post_init__(self) -> None:
         # Frozen dataclass: tuples/dicts so callers cannot mutate after construct.

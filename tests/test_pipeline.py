@@ -97,3 +97,26 @@ def test_monitor_var_shows_up_in_balance_table() -> None:
     tenure_rows = bal.filter(pc.equal(bal["variable"], "tenure"))
     assert tenure_rows["role"].to_pylist() == ["monitor"]
     assert tenure_rows["kind"].to_pylist() == ["ks"]
+
+
+def test_verbose_emits_stage_lines(capsys) -> None:
+    cfg = MatchConfig(
+        match_vars=["income", "age", "region"],
+        treatment_col="is_target",
+        n=1,
+        tolerance=0.0,
+        min_control_pool_size=1,
+        n_bins=3,
+        verbose=True,
+    )
+    result = ControlMatcher(cfg).fit_match(_frame())
+    err = capsys.readouterr().err
+    assert "rapidmatch" in err
+    assert "start" in err
+    assert "profile" in err
+    assert "stratify" in err
+    assert "match" in err
+    assert "done" in err
+    assert "target=" in err
+    assert "untreated=" in err
+    assert result.coverage_summary["n_target"] == 40
