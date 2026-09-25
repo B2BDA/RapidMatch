@@ -5,6 +5,11 @@ Steps, in order:
 2. multiply by user weights (default 1)
 3. weighted Euclidean distance
 4. match_strength = exp(-distance), always in (0, 1]
+5. optional per-target cap, keeping only the K closest controls
+
+Step 5 is opt-in via `config.max_candidates_per_target`. It bounds retained
+memory on very large datasets without changing which pair ranks first: a
+target's single nearest control is always inside the cap.
 
 Missing-flag columns are intentionally absent from `numeric_vars`.
 """
@@ -18,6 +23,34 @@ import numpy as np
 from rapidmatch.config import MatchConfig
 
 _MAX_DISTANCE_CELLS = 16_000_000
+
+
+def _prune_to_cap(
+    strength_block: np.ndarray,
+    target_block_ids: np.ndarray,
+    control_ids: np.ndarray,
+    cap: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Keep the `cap` highest-strength controls for every row of the block.
+
+    Falls through to the full cross-product when the block already has at
+    most `cap` controls, so small strata keep their exact ordering.
+    """
+    n_rows, n_c = strength_block.shape
+    if n_c <= cap:
+        return (
+            np.repeat(target_block_ids, n_c),
+            np.tile(control_ids, n_rows),
+            strength_block.ravel(),
+        )
+    keep = np.argpartition(strength_block, n_c - cap, axis=1)[:, n_c - cap :]
+    flat_keep = keep.ravel()
+    rows = np.repeat(np.arange(n_rows), cap)
+    return (
+        target_block_ids[rows],
+        control_ids[flat_keep],
+        strength_block[rows, flat_keep],
+    )
 
 
 def score_pairs(
@@ -45,10 +78,13 @@ def score_pairs(
     std = np.where(target_std == 0, 1.0, target_std)
     zt = (target_x - target_mean) / std
     zc = (control_x - target_mean) / std
+    cap = config.max_candidates_per_target
     if not weights.size:
         # Categorical-only strata: every pair in the cell is equally close.
         dist = np.zeros((n_t, n_c), dtype=np.float64)
         strength = np.exp(-dist)
+        if cap is not None:
+            return _prune_to_cap(strength, target_ids, control_ids, cap)
         return (
             np.repeat(target_ids, n_c),
             np.tile(control_ids, n_t),
@@ -65,10 +101,13 @@ def score_pairs(
     if block_t >= n_t:
         delta = zt[:, None, :] - zc[None, :, :]
         dist = np.sqrt(np.sum(delta * delta, axis=2))
+        strength = np.exp(-dist)
+        if cap is not None:
+            return _prune_to_cap(strength, target_ids, control_ids, cap)
         return (
             np.repeat(target_ids, n_c),
             np.tile(control_ids, n_t),
-            np.exp(-dist).ravel(),
+            strength.ravel(),
         )
 
     t_parts: list[np.ndarray] = []
@@ -79,9 +118,18 @@ def score_pairs(
         zt_block = zt[start:end]
         delta = zt_block[:, None, :] - zc[None, :, :]
         dist = np.sqrt(np.sum(delta * delta, axis=2))
+        strength = np.exp(-dist)
+        if cap is not None:
+            bt, bc, bs = _prune_to_cap(
+                strength, target_ids[start:end], control_ids, cap
+            )
+            t_parts.append(bt)
+            c_parts.append(bc)
+            s_parts.append(bs)
+            continue
         t_parts.append(np.repeat(target_ids[start:end], n_c))
         c_parts.append(np.tile(control_ids, end - start))
-        s_parts.append(np.exp(-dist).ravel())
+        s_parts.append(strength.ravel())
     return (
         np.concatenate(t_parts),
         np.concatenate(c_parts),

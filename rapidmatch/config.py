@@ -29,6 +29,13 @@ class MatchConfig:
             Below this the stratum is flagged `thin_stratum` but still matched.
         min_control_ratio: Optional extra floor: ceil(ratio * n_target_in_stratum).
         n_bins: Quantile bins computed on the target group for numeric match_vars.
+        max_candidates_per_target: Optional cap on how many controls are kept per
+            target when scoring. `None` (default) keeps every candidate pair and is
+            the exact behaviour. An int keeps only the K closest controls per target
+            per stratum, which bounds memory on very large datasets. A target's
+            single nearest control is never pruned, so match quality is preserved;
+            in crowded strata a target may run out of candidates and go unmatched
+            where the unpruned run would have found a weaker control.
         id_col: Optional business id copied into the output. Internal matching
             always uses `_rm_id` regardless.
         js_threshold: Flag a categorical var when JS distance exceeds this
@@ -51,6 +58,7 @@ class MatchConfig:
     min_control_pool_size: int = 5
     min_control_ratio: Optional[float] = None
     n_bins: int = 4
+    max_candidates_per_target: Optional[int] = None
     id_col: Optional[str] = None
     js_threshold: float = 0.10
     ks_threshold: float = 0.05
@@ -100,6 +108,8 @@ def _validate(cfg: MatchConfig) -> None:
         raise ValueError("min_control_ratio must be > 0 when provided")
     if cfg.n_bins < 2:
         raise ValueError("n_bins must be >= 2")
+    if cfg.max_candidates_per_target is not None and cfg.max_candidates_per_target < 1:
+        raise ValueError("max_candidates_per_target must be >= 1 when provided")
     if cfg.id_col is not None and cfg.id_col == cfg.treatment_col:
         raise ValueError("id_col cannot be treatment_col")
     if not 0.0 <= cfg.js_threshold <= 1.0:
