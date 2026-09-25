@@ -3,7 +3,7 @@
 Steps, in order:
 1. z-score numeric match_vars with GLOBAL target mean/std
 2. multiply by user weights (default 1)
-3. weighted Euclidean distance
+3. weighted Euclidean distance (Gram 2D form of the n-dim formula)
 4. match_strength = exp(-distance), always in (0, 1]
 5. optional per-target cap, keeping only the K closest controls
 
@@ -23,6 +23,28 @@ import numpy as np
 from rapidmatch.config import MatchConfig
 
 _MAX_DISTANCE_CELLS = 16_000_000
+
+
+def _pairwise_euclidean(zt: np.ndarray, zc: np.ndarray) -> np.ndarray:
+    """Pairwise Euclidean distances between rows of `zt` and rows of `zc`.
+
+    For weighted z-score rows a (target) and b (control) in R^n:
+
+        d(a, b) = sqrt( sum_{k=1}^{n} (a_k - b_k)^2 )
+
+    Direct broadcast of (a - b) would allocate a 3D cube of shape
+    (n_target, n_control, n). Same distances, less memory, via:
+
+        ||a - b||^2 = ||a||^2 + ||b||^2 - 2 a·b
+
+    Tiny negatives from floating-point noise are clipped to 0 so identical
+    rows stay distance 0.
+    """
+    target_sq = np.sum(zt * zt, axis=1, keepdims=True)
+    control_sq = np.sum(zc * zc, axis=1)
+    sq = target_sq + control_sq - 2.0 * (zt @ zc.T)
+    np.maximum(sq, 0.0, out=sq)
+    return np.sqrt(sq)
 
 
 def _prune_to_cap(
@@ -75,6 +97,7 @@ def score_pairs(
     n_c = len(control_ids)
     weights = np.array([config.weight_for(v) for v in numeric_vars], dtype=np.float64)
     # Constant columns would divide by zero; treat them as already standardized.
+    # z_k = (x_k - mu_k) / sigma_k, mu/sigma from the whole target group.
     std = np.where(target_std == 0, 1.0, target_std)
     zt = (target_x - target_mean) / std
     zc = (control_x - target_mean) / std
@@ -91,16 +114,17 @@ def score_pairs(
             strength.ravel(),
         )
 
+    # a_k = w_k * z_k  (default w_k = 1). Distance uses these weighted z-rows.
     zt = zt * weights
     zc = zc * weights
-    n_dim = int(zt.shape[1])
+    # Bound the (n_t, n_c) distance matrix, not a 3D (n_t, n_c, n) cube.
     block_t = n_t
-    if n_t * n_c * n_dim > _MAX_DISTANCE_CELLS:
-        block_t = max(1, _MAX_DISTANCE_CELLS // (n_c * max(n_dim, 1)))
+    if n_t * n_c > _MAX_DISTANCE_CELLS:
+        block_t = max(1, _MAX_DISTANCE_CELLS // max(n_c, 1))
 
     if block_t >= n_t:
-        delta = zt[:, None, :] - zc[None, :, :]
-        dist = np.sqrt(np.sum(delta * delta, axis=2))
+        # d = sqrt(sum_k (a_k - b_k)^2);  s = exp(-d) in (0, 1].
+        dist = _pairwise_euclidean(zt, zc)
         strength = np.exp(-dist)
         if cap is not None:
             return _prune_to_cap(strength, target_ids, control_ids, cap)
@@ -115,9 +139,7 @@ def score_pairs(
     s_parts: list[np.ndarray] = []
     for start in range(0, n_t, block_t):
         end = min(start + block_t, n_t)
-        zt_block = zt[start:end]
-        delta = zt_block[:, None, :] - zc[None, :, :]
-        dist = np.sqrt(np.sum(delta * delta, axis=2))
+        dist = _pairwise_euclidean(zt[start:end], zc)
         strength = np.exp(-dist)
         if cap is not None:
             bt, bc, bs = _prune_to_cap(

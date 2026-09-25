@@ -78,7 +78,7 @@ rapidmatch/
     flag_coverage.py          Module 6  no_control / thin / eligible
   scoring/
     scorer.py                 Module 7  global z-score, weighted Euclidean, exp(-d);
-                                        chunked 3D distance; repeat/tile pair ids
+                                        Gram 2D distance; repeat/tile pair ids
     score_strata.py           one forward scan into per-stratum slices;
                               opt-in ThreadPoolExecutor, order-preserving
   matching/
@@ -201,10 +201,13 @@ Internal columns (`_rm_id`, `_treatment`, `_stratum`, `_bin_*`,
 - `score_all_strata` indexes rows in **one forward scan**, then scores only
   keys in `eligible` (appearance order inside each stratum).
 - Per eligible stratum: all target x control pairs.
-- Distance is still `sqrt(sum(delta^2))` on a `(n_target, n_control, n_dim)`
-  tensor. If that tensor would exceed `_MAX_DISTANCE_CELLS` (16e6), score
-  target-row blocks against all controls and concatenate. Never chunk on
-  the control axis. Categorical-only is not chunked.
+- Distance is still Euclidean: `d = sqrt(sum_k (a_k - b_k)^2)` on weighted
+  z-rows. Computed as `||a||^2 + ||b||^2 - 2 a·b` (2D grid, not a
+  `(n_target, n_control, n_dim)` cube). If the grid would exceed
+  `_MAX_DISTANCE_CELLS` (16e6 cells), score target-row blocks against all
+  controls and concatenate. Never chunk on the control axis.
+  Categorical-only is not chunked. Tiny float noise vs the 3D form is
+  clipped so identical rows stay distance 0.
 - Pair ids use `repeat`/`tile` (target-major, control inner) — same order as
   the old `meshgrid(..., indexing="ij")`.
 - `match_strength = exp(-weighted_euclidean(z))`, bounded `(0, 1]`.
@@ -325,7 +328,7 @@ python3 demo.py
 Key tests:
 
 - `tests/matching/test_greedy_match.py` — control never reused; n-slots; gapped ids
-- `tests/scoring/test_scorer.py` — strength bounds; identical -> 1.0; chunk == full tensor
+- `tests/scoring/test_scorer.py` — strength bounds; identical -> 1.0; Gram == 3D Euclidean; chunk == full grid
 - `tests/scoring/test_score_strata.py` — parallel == serial; ineligible strata ignored
 - `tests/binning/test_compute_bin_edges.py` — edges ignore huge control outliers
 - `tests/coverage/test_flag_coverage.py` — thin stays eligible

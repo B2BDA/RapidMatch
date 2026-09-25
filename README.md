@@ -202,7 +202,7 @@ A row with income `80,000` and tenure `6` becomes:
 - `z_tenure = (6 − 5) / 2 = 0.50`, then × weight `1.5` → `0.75`
 
 Do the same for the other person in the pair. Distance is ordinary Euclidean
-on those weighted z's:
+on those weighted z's. With two variables:
 
 `distance = sqrt( (z_income_T − z_income_C)² + (z_tenure_T − z_tenure_C)² )`
 
@@ -210,6 +210,26 @@ Add more numeric `match_vars` the same way: one extra `(Δz × weight)²` inside
 the square root. Categorical `match_vars` do **not** enter this formula —
 they already put the two people in the same stratum (or not). If a stratum
 is categorical-only, every pair in it has distance `0` and strength `1`.
+
+**Scoring formulas (n numeric `match_vars`).** Moments `μ_k`, `σ_k` are
+computed **once** from the whole target group (`treatment = 1`). A constant
+column uses `σ_k = 1` so we never divide by zero. Weight `w_k` defaults to
+`1`. For feature `k = 1 … n`:
+
+```
+z_k        = (x_k − μ_k) / σ_k
+a_k        = w_k · z_k                         (target row)
+b_k        = w_k · z_k                         (control row)
+
+d(a, b)    = sqrt( Σ_{k=1}^{n} (a_k − b_k)² )  (weighted Euclidean)
+
+strength   = exp(−d(a, b))                     always in (0, 1]
+```
+
+`d = 0` (identical after z-score + weights) → `strength = 1`. Larger `d`
+slides toward `0`, never negative, never above `1`. The engine evaluates
+`d` as `||a||² + ||b||² − 2 a·b` (same Euclidean distance, no 3D
+difference cube). Pair ranking is unchanged.
 
 Same mean/std everywhere is the point: a `z = 1` on income means the same
 thing in every stratum, so match strengths can be sorted and cut globally.
@@ -351,9 +371,10 @@ flowchart TD
   PyArrow, and scoring/balance use zero-copy NumPy views. No intermediate
   `to_pandas()` anywhere in the pipeline
 - **Identity-preserving scoring/matching** — strata are indexed in one forward
-  scan, large distance tensors are scored in target-row chunks, and greedy
-  occupancy uses boolean/int masks. Same pairs, same strengths, less RAM/CPU.
-  Parallel scoring (`n_workers`) stays opt-in and bit-identical to serial.
+  scan, pairwise Euclidean uses the Gram form `||a||² + ||b||² − 2 a·b`
+  (chunked on target rows if the 2D grid would exceed 16e6 cells), and greedy
+  occupancy uses boolean/int masks. Same pairs, same ranking, less RAM/CPU.
+  Parallel scoring (`n_workers`) stays opt-in and order-identical to serial.
 - **Candidate capping is opt-in** — `max_candidates_per_target=None` (default)
   scores and keeps every pair, exactly as before. Setting an int bounds retained
   memory by keeping only each target's K closest controls; strata smaller than
@@ -488,8 +509,9 @@ Tests map 1:1 to step files (plan.md §3a):
 - `tests/test_config.py` — validation errors, defaults
 - `tests/test_pipeline.py` — every target covered, thin flag coexists, monitor vars
 - `tests/scoring/` — strength in (0, 1], identical rows → 1.0, parallel == serial,
-  chunked distance == full tensor, ineligible strata ignored,
-  candidate cap bounds pairs without changing the nearest match
+  Gram 2D distance == textbook Euclidean, chunked grid == full grid,
+  ineligible strata ignored, candidate cap bounds pairs without changing
+  the nearest match
 - `tests/matching/` — control never reused, n-slots, gapped 1-based ids
 - `tests/binning/` — bin edges derived from target only
 - `tests/coverage/` — thin strata stay eligible
@@ -513,7 +535,7 @@ rapidmatch/
 ├── binning/            # Module 5: quantile bins + composite stratum key
 ├── coverage/           # Module 6: no_control / thin / eligible
 ├── scoring/            # Module 7: global z-score + weighted Euclidean distance
-│   ├── scorer.py       # chunked 3D distance; repeat/tile pair ids
+│   ├── scorer.py       # Gram 2D Euclidean; chunked 2D grid; repeat/tile pair ids
 │   └── score_strata.py # one-scan stratum index; opt-in parallel scoring
 ├── matching/           # Module 8: global greedy, boolean-mask occupancy
 ├── tolerance/          # Module 9: global strength percentile cutoff

@@ -65,8 +65,9 @@ def test_repeat_tile_order_matches_meshgrid() -> None:
     mean, std = target_moments(tx)
     got = score_pairs(t_ids, c_ids, tx, cx, ["x", "y"], cfg, mean, std)
     ref = _full_tensor_reference(t_ids, c_ids, tx, cx, ["x", "y"], cfg, mean, std)
-    for g, r in zip(got, ref):
-        np.testing.assert_array_equal(g, r)
+    np.testing.assert_array_equal(got[0], ref[0])
+    np.testing.assert_array_equal(got[1], ref[1])
+    np.testing.assert_allclose(got[2], ref[2], rtol=1e-12, atol=1e-12)
 
 
 def test_chunked_score_equals_full_tensor(monkeypatch) -> None:
@@ -81,8 +82,39 @@ def test_chunked_score_equals_full_tensor(monkeypatch) -> None:
     mean, std = target_moments(tx)
     got = scorer_mod.score_pairs(t_ids, c_ids, tx, cx, ["x", "y"], cfg, mean, std)
     ref = _full_tensor_reference(t_ids, c_ids, tx, cx, ["x", "y"], cfg, mean, std)
-    for g, r in zip(got, ref):
-        np.testing.assert_array_equal(g, r)
+    np.testing.assert_array_equal(got[0], ref[0])
+    np.testing.assert_array_equal(got[1], ref[1])
+    np.testing.assert_allclose(got[2], ref[2], rtol=1e-12, atol=1e-12)
+
+
+def test_pairwise_euclidean_matches_broadcast_3d() -> None:
+    """Gram 2D distance must equal the textbook 3D Euclidean tensor.
+
+    For weighted z-rows a (target) and b (control):
+
+        d(a, b) = sqrt( sum_k (a_k - b_k)^2 )
+
+    The scorer must compute that as ||a||^2 + ||b||^2 - 2 a·b, not by
+    allocating a (n_target, n_control, n_dim) difference cube.
+    """
+    from rapidmatch.scoring.scorer import _pairwise_euclidean
+
+    rng = np.random.default_rng(0)
+    zt = rng.normal(size=(5, 4))
+    zc = rng.normal(size=(7, 4))
+    delta = zt[:, None, :] - zc[None, :, :]
+    expected = np.sqrt(np.sum(delta * delta, axis=2))
+    got = _pairwise_euclidean(zt, zc)
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_pairwise_euclidean_identical_row_is_zero() -> None:
+    from rapidmatch.scoring.scorer import _pairwise_euclidean
+
+    z = np.array([[1.5, -0.25, 3.0]])
+    dist = _pairwise_euclidean(z, z)
+    assert dist.shape == (1, 1)
+    assert dist[0, 0] == 0.0
 
 
 def test_categorical_only_not_chunked() -> None:
