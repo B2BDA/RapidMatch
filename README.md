@@ -354,6 +354,10 @@ flowchart TD
   scan, large distance tensors are scored in target-row chunks, and greedy
   occupancy uses boolean/int masks. Same pairs, same strengths, less RAM/CPU.
   Parallel scoring (`n_workers`) stays opt-in and bit-identical to serial.
+- **Candidate capping is opt-in** — `max_candidates_per_target=None` (default)
+  scores and keeps every pair, exactly as before. Setting an int bounds retained
+  memory by keeping only each target's K closest controls; strata smaller than
+  K are untouched, so small datasets can't change behaviour by accident.
 
 ## Public API
 
@@ -370,6 +374,7 @@ flowchart TD
 | `min_control_pool_size` | `int` | `5` | Absolute control floor per stratum. Below this → flagged `thin_stratum`, still matched. |
 | `min_control_ratio` | `Optional[float]` | `None` | Optional ratio floor: effective minimum = `max(min_control_pool_size, ceil(ratio × n_target_in_stratum))`. |
 | `n_bins` | `int` | `4` | Quantile bins for numeric `match_vars`; edges derived from the target group only. Must be ≥ 2. |
+| `max_candidates_per_target` | `Optional[int]` | `None` | Per-target candidate cap during scoring. `None` = keep every pair (exact). An int keeps only that many closest controls per target, bounding memory on multi-million-row inputs. A target's nearest control is never dropped, so match quality is preserved; in very crowded strata a target may run out of candidates instead of falling back to a distant one. |
 | `id_col` | `Optional[str]` | `None` | Business id copied to output. Internal matching uses `_rm_id`. Cannot be the same as `treatment_col`. |
 | `js_threshold` | `float` | `0.10` | Flag a categorical var when its JS distance exceeds this `[0, 1]`. |
 | `ks_threshold` | `float` | `0.05` | Flag a numeric var when its KS statistic exceeds this `[0, 1]`. |
@@ -483,7 +488,8 @@ Tests map 1:1 to step files (plan.md §3a):
 - `tests/test_config.py` — validation errors, defaults
 - `tests/test_pipeline.py` — every target covered, thin flag coexists, monitor vars
 - `tests/scoring/` — strength in (0, 1], identical rows → 1.0, parallel == serial,
-  chunked distance == full tensor, ineligible strata ignored
+  chunked distance == full tensor, ineligible strata ignored,
+  candidate cap bounds pairs without changing the nearest match
 - `tests/matching/` — control never reused, n-slots, gapped 1-based ids
 - `tests/binning/` — bin edges derived from target only
 - `tests/coverage/` — thin strata stay eligible
@@ -562,6 +568,15 @@ A stratum flagged when its control pool is below `min_control_pool_size` (or `mi
 **Can I run this in parallel?**
 
 Yes — set `n_workers` to the number of threads you want (≥ 1). Results are order-preserving and bit-identical to serial. DuckDB execution threads are controlled separately via `duckdb_threads`.
+
+**I got a `MemoryError` on a large file. What do I do?**
+
+Two levers, usually together:
+
+1. **Raise `n_bins`** (e.g. 8–20). Strata get narrower, and total candidate pairs shrink fast — this is the cheaper win because it also cuts work, not just memory.
+2. **Set `max_candidates_per_target`** (e.g. 50). Each target then keeps only its 50 closest controls instead of every control in its stratum, which bounds retained memory no matter how wide a stratum gets.
+
+Scoring still computes every distance; the cap only stops *storing* the worthless ones, so a very large run stays bounded in RAM but not in time. Small strata are never pruned, so coverage on everyday datasets is unaffected.
 
 ## License
 

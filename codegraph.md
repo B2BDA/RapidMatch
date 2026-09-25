@@ -33,6 +33,7 @@ config = MatchConfig(
     tolerance=0.2,                # keep pairs at/above this strength quantile
     min_control_pool_size=5,
     n_bins=4,
+    max_candidates_per_target=None,  # optional: keep K closest controls per target
     monitor_vars=["tenure"],      # optional; JS/KS + trim if flagged
     js_threshold=0.10,
     ks_threshold=0.05,
@@ -209,6 +210,13 @@ Internal columns (`_rm_id`, `_treatment`, `_stratum`, `_bin_*`,
 - `match_strength = exp(-weighted_euclidean(z))`, bounded `(0, 1]`.
 - Identical rows (after z-score + weight) have strength 1.0.
 - Categorical-only stratum: distance 0, strength 1 for every pair in the cell.
+- Optional `config.max_candidates_per_target` (default `None` = keep all):
+  after each block is scored, `_prune_to_cap` keeps only the K strongest
+  controls per target row (`np.argpartition`, unsorted — greedy re-sorts
+  globally anyway). Applies on all three paths (categorical, unchunked,
+  chunked). A stratum with `n_control <= K` is untouched, so small inputs are
+  byte-identical to the uncapped run. Bounds **retained** pairs only; the
+  distance computation is unchanged.
 - `n_workers > 1` uses `ThreadPoolExecutor.map`; output is bit-identical to serial.
 
 ### Module 8 — matching (`matching/greedy_match.py`)
