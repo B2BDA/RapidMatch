@@ -74,7 +74,7 @@ config = MatchConfig(
     id_col="id",                     # optional business id
     weights={"income": 1.5},         # optional per-variable weights
     n=1,                             # 1:1 matching (1:n supported)
-    tolerance=0.2,                   # keep pairs at/above this strength quantile
+    tolerance=0.2,                   # filter weaker secondary assignments
     min_control_pool_size=5,
     n_bins=4,
     monitor_vars=["tenure"],         # optional: post-hoc balance checks
@@ -124,7 +124,8 @@ Given a dataset with a binary treatment flag, RapidMatch:
    weighted Euclidean distance, and `match_strength = exp(-distance)`
 7. **Matches** greedily across all strata — strongest pairs first, a control row
    is never reused (sampling without replacement)
-8. **Filters** by a global match-strength tolerance
+8. **Filters** weaker assignments by a global match-strength tolerance while
+   preserving each target's strongest unique assignment
 9. **Checks balance:** are the two groups still similar on categories (JS) and
    numbers (KS), for both match_vars and monitor_vars?
 10. **Trims** control rows responsible for drifted monitor groups (weakest matches first)
@@ -140,7 +141,7 @@ flowchart TD
     F["6. Flag coverage: no control / thin / eligible"]
     G["7. Score pairs: global z-score, weighted distance, strength"]
     H["8. Greedy match: strongest first, no control reused"]
-    I["9. Tolerance: keep pairs at or above the strength cutoff"]
+    I["9. Tolerance: filter weaker pairs; preserve primary coverage"]
     J["10. Check balance: JS on categories, KS on numbers"]
     K{"Monitor var drifted?"}
     L["Trim weakest matched controls"]
@@ -281,22 +282,25 @@ A control row is **never reused** (sampling without replacement):
 Once C2 is taken by T3, T4's candidate C2 is skipped — the control can only
 match once in the whole run.
 
-**3 — Filter by a global strength tolerance.**
+**3 — Filter weaker assignments by a global strength tolerance.**
 
 After all strata are matched, the strength scores are collapsed, and a global
 cutoff (default `tolerance = 0.8`, the 80th-percentile of strengths actually
-scored) keeps only assignments at/above it — the threshold `cutoff` is applied
-*across all strata at once*, keeping match strength comparable everywhere:
+scored) keeps assignments at/above it — the threshold `cutoff` is applied
+*across all strata at once*, keeping match strength comparable everywhere.
+Each target's strongest unique assignment is retained even when it falls below
+the cutoff, so tolerance cannot silently remove a target from the full-target
+analysis:
 
 | assignment | strength | status |
 |------------|----------|--------|
 | T1–C1 | `0.98` | ✅ kept |
 | T2–C5 | `0.91` | ✅ kept |
-| T3–C2 | `0.49` | ❌ under cutoff |
-| T6–C4 | `0.40` | ❌ under cutoff |
+| T3–C2 | `0.49` | ⚠️ kept as low quality |
+| T6–C4 | `0.40` | ⚠️ kept as low quality |
 
-Weak matches aren't hidden — they're reported as `below_tolerance`, and counted
-in the coverage breakdown.
+Weak retained matches aren't hidden — they're reported with
+`quality_status = "low_quality"` and counted in the coverage breakdown.
 
 **4 — Check that the matched control still looks like the target.**
 
@@ -405,7 +409,7 @@ flowchart TD
 | `monitor_vars` | `Sequence[str]` | `()` | Columns **watched, not matched on**. JS (categorical) and KS (numeric) balance checked after matching; over-represented groups can be drift-trimmed. Cannot overlap `match_vars`. |
 | `weights` | `Mapping[str, float]` | `{}` | Per-variable distance multipliers on z-scored `match_vars`. Missing keys default to `1.0`. Unknown keys (not in `match_vars`) are rejected. |
 | `n` | `int` | `1` | Controls per target row (1:1 default; 1:n supported). |
-| `tolerance` | `float` | `0.8` | Global strength cutoff `[0, 1]`. Keeps pairs at/above this quantile of accepted strengths. `0` = keep everyone, `1` = only the very best. |
+| `tolerance` | `float` | `0.8` | Global strength cutoff `[0, 1]`. Filters weaker assignments at this quantile while retaining each target's strongest unique assignment for full-target coverage. `0` = keep everyone, `1` = retain only the strongest assignment per target. |
 | `min_control_pool_size` | `int` | `5` | Absolute control floor per stratum. Below this → flagged `thin_stratum`, still matched. |
 | `min_control_ratio` | `Optional[float]` | `None` | Optional ratio floor: effective minimum = `max(min_control_pool_size, ceil(ratio × n_target_in_stratum))`. |
 | `n_bins` | `int` | `4` | Quantile bins for numeric `match_vars`; edges derived from the target group only. Must be ≥ 2. |
@@ -430,10 +434,10 @@ flowchart TD
 
 | Attribute | Description |
 |-----------|-------------|
-| `pairs` | PyArrow Table (pair-level) with `target_id`, `control_id`, `target_rm_id`, `control_rm_id`, `stratum`, `match_strength`, `match_rank`, `match_status`, `thin_stratum` |
-| `targets` | PyArrow Table, one row per target: `match_status`, `n_matches`, `thin_stratum`, `best_strength` |
+| `pairs` | PyArrow Table (pair-level) with `target_id`, `control_id`, `target_rm_id`, `control_rm_id`, `stratum`, `match_strength`, `match_rank`, `match_status`, `quality_status`, `thin_stratum` |
+| `targets` | PyArrow Table, one row per target: `match_status`, `quality_status`, `n_matches`, `thin_stratum`, `best_strength` |
 | `cutoff` | The strength quantile actually applied |
-| `coverage_summary` | Counts and percent matched / no control / below tolerance |
+| `coverage_summary` | Counts and percentages for matched targets, unique controls, low-quality matches, no control, and below tolerance |
 | `report` | Module 13 artifacts: `coverage`, `balance` (`pyarrow.Table`), `drift_log` (`pyarrow.Table`), `data_profile` |
 
 > Both `pairs` and `targets` are `pyarrow.Table` objects. Use Arrow/NumPy
@@ -445,12 +449,14 @@ flowchart TD
 
 | Status | Meaning |
 |--------|---------|
-| `matched` | At least one pair survived tolerance |
+| `matched` | At least one unique control assignment was retained |
 | `no_control_available` | Stratum had zero control rows |
-| `below_tolerance` | Had assignments, all fell below cutoff |
+| `below_tolerance` | Had assignments, all fell below cutoff in strict filtering mode |
 | `unmatched` | Eligible but lost every control slot to stronger pairs |
 
 `thin_stratum` is a separate boolean and can be True on a `matched` row.
+`quality_status = "low_quality"` identifies a retained primary assignment below
+the global cutoff.
 
 ## Supported Input Formats
 
@@ -588,7 +594,12 @@ All matching, transformation, and scoring runs on DuckDB + PyArrow + NumPy. Pand
 
 **How does `tolerance` work?**
 
-After all pairs are scored, `tolerance` sets a global strength quantile. Default `0.8` keeps the top 20% of accepted strengths. `0` = keep everyone, `1` = only the very best. The cutoff is applied across all strata at once, keeping match strength comparable everywhere.
+After all pairs are scored, `tolerance` sets a global strength quantile. Default
+`0.8` filters the weakest 80% of secondary assignments. Each target's strongest
+unique assignment is retained for the full-target analysis and marked
+`low_quality` when it falls below the cutoff. `0` = keep everyone; `1` = keep
+only each target's strongest assignment. The cutoff is applied across all strata
+at once, keeping match strength comparable everywhere.
 
 **What happens if a stratum has no controls?**
 

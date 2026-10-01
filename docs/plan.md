@@ -1,8 +1,10 @@
 # Plan.md — RapidMatch (RiMatch) Control Group Matching
 
 **Status:** Design locked (v1). Core library (Modules 1-13) implemented as the
-`rapidmatch` Python package. DuckDB production path is live. Module 14 (FastAPI)
-is not started. `UniversalDataLoader` is vendored from RapidSegment into
+`rapidmatch` Python package. DuckDB production path is live. The full-target
+comparison and control-capacity warning requirements below are implemented.
+Module 14 (FastAPI) is not started.
+`UniversalDataLoader` is vendored from RapidSegment into
 `rapidmatch/ingestion/data_loader.py`. Running-code map: `codegraph.md`.
 See §8 Changelog for details.
 **Purpose:** This file is the source of truth for the project. It is updated every time a
@@ -26,6 +28,13 @@ This control group is used to measure the real impact of a campaign, isolated fr
 pre-existing differences in customer attributes between who was targeted and who
 wasn't. All matching features must be **pre-campaign** — this is what makes the
 comparison fair (no data leakage from the treatment itself).
+
+The final pseudo-control comparison must always use the **full target group**.
+Comparing only the subset of targets that received a match is not an accepted
+final analysis. Controls are unique: a control row may be assigned at most once
+and may never be reused. When the available control pool or feature overlap
+cannot support full coverage, RapidMatch must report that limitation rather than
+silently changing the target population or reusing controls.
 
 ## 2. Prior direction (superseded)
 
@@ -59,8 +68,11 @@ only (no PySpark), and is simpler as a result.
 | Matching algorithm | Global greedy-edge matching: pool all valid pairs across strata, sort by strength descending, walk the list assigning if both sides are still free. **No Hungarian algorithm, no ML** |
 | Matching ratio | 1:1 default, 1:n supported (n user-defined) |
 | Replacement | Sampling without replacement always — a control row is used at most once, ever |
-| Tolerance | Global percentile cutoff on match strength (not per-stratum). Default is strict — only top-tier matches kept |
+| Tolerance | Global percentile quality cutoff (not per-stratum). Weaker secondary assignments are filtered, but each target's strongest unique assignment is preserved for full-target analysis |
 | Uncovered target rows | Kept in output, not silently dropped, labeled via `match_status` |
+| Final comparison population | Balance and downstream analysis compare the full target group against the available unique pseudo-control group; matched-target-only analysis is not valid |
+| Control capacity warning | After profiling, warn when `n_control < n_target`: full unique 1:1 coverage is impossible without reuse; continue running and report the capacity shortfall |
+| Coverage versus quality | Maximize unique target coverage where possible; surface weak assignments as quality diagnostics; never reuse a control |
 | Min control pool per stratum | `min_control_pool_size` (default `5`, absolute floor) and optional `min_control_ratio` (control candidates required per target row in that stratum). Effective minimum = `max(min_control_pool_size, ceil(min_control_ratio × target_count_in_stratum))` when a ratio is given, else just the flat floor. Strata below this are labeled `thin_stratum` — separate from `no_control_available` (which means literally zero candidates). **Locked:** `thin_stratum` rows still proceed through matching and are flagged via a boolean that can co-occur with `matched` |
 | Variable roles | `match_vars` (stratify + distance) vs. `monitor_vars` (post-hoc balance check only, not used to match) |
 | Balance metrics | After matching, one number per column asking "do the two groups still look alike?" Categories: JS (mix / recipe; 0 = identical, 1 = nothing in common). Numbers: KS (biggest gap between the two sorted lineups). Both run on `match_vars` (sanity) and `monitor_vars` (primary) |
@@ -138,6 +150,9 @@ Code: `rapidmatch/data_report/report.py` (`DataReport`).
       metadata only, no data scan needed
 - [x] Target row count vs. non-target row count (the one thing specific to us that a
       generic loader has no concept of)
+- [x] Emit an `InsufficientControlPoolWarning` when `n_control < n_target`, stating
+       that no-reuse matching cannot provide full unique 1:1 coverage. This is a
+       warning, not a hard failure; the run continues and reports the shortfall.
 - [x] Lazy by default: building the report object triggers nothing; only calling
       `.summary()` / `.to_dict()` actually runs the query
 
@@ -190,12 +205,20 @@ Code: `rapidmatch/matching/greedy_match.py`.
 ### Module 9 — Tolerance filtering
 Code: `rapidmatch/tolerance/apply_tolerance.py`.
 - [x] Apply global percentile cutoff to accepted pairs (`cutoff = quantile(strengths, tolerance)`)
-- [x] Pairs below cutoff: target row's status becomes `"below_tolerance"` unless another accepted match already covers it
+- [x] Filter secondary pairs below cutoff while preserving each target's strongest
+       unique assignment for full-target analysis
+- [x] In the full-target coverage policy, do not use the cutoff to silently
+       redefine the analysis population. Preserve a target's best unique
+       assignment when it is needed for coverage, and expose weak quality in the
+       result/report instead of dropping the only available control.
 
 ### Module 10 — Output assembly
 Code: `rapidmatch/output/assemble.py` (`MatchResult`).
 - [x] Attach `match_strength`, `match_rank` (1 = best), `match_status` (`matched` / `no_control_available` / `below_tolerance` / `unmatched`) to every target row and its matched control row(s)
 - [x] `thin_stratum` is informational and can co-occur with `matched` (separate boolean flag alongside `match_status`)
+- [x] Preserve full-target accounting in the output and report the number of
+       unique controls actually available. Never claim full coverage when the
+       no-reuse capacity or overlap constraints make it impossible.
 
 ### Module 11 — Post-hoc balance validation
 Code: `rapidmatch/balance/` (`checker.py`, `js_distance.py`, `ks_statistic.py`).
@@ -206,6 +229,9 @@ Code: `rapidmatch/balance/` (`checker.py`, `js_distance.py`, `ks_statistic.py`).
       each value). Computed for `match_vars` (sanity — should already be tight)
       and `monitor_vars` (primary check)
 - [x] Flag columns exceeding threshold (JS > 0.10, KS > 0.05, configurable via `js_threshold` / `ks_threshold`)
+- [x] Lock the final comparison scope to all target rows versus the unique
+       pseudo-control rows; downstream examples must not replace the full target
+       group with only matched targets.
 
 ### Module 12 — Drift diagnosis & correction
 Code: `rapidmatch/drift/diagnose.py`, `rapidmatch/drift/correct.py`. Trim-only (no swap-in). Weakest `match_strength` rows dropped first.
@@ -324,6 +350,15 @@ deterministic, and easy to explain to a non-technical stakeholder.
     report the average match_strength lost alongside the balance gained.
 
 ## 8. Changelog
+
+- **Full-target comparison and no-reuse capacity requirement locked (2026-10-01).**
+  Final pseudo-control validation must compare all target rows against the
+  available unique controls. Matched-target-only comparisons are not accepted.
+  Controls remain sampling-without-replacement; if the control pool is smaller
+  than the target group, RapidMatch warns that full unique 1:1 coverage is
+  impossible and reports the shortfall rather than reusing controls or silently
+  changing the target population. Implemented in the data report, tolerance,
+  output, reporting, and notebook comparison paths.
 
 - **v1 spec locked.** Full step-by-step plan above agreed and finalized. No code
   written yet for this version. Diagrams added. This document created as source of

@@ -30,7 +30,7 @@ config = MatchConfig(
     id_col="id",                  # optional business id
     weights={"income": 1.5},      # unspecified vars default to 1
     n=1,                          # matches per target
-    tolerance=0.2,                # keep pairs at/above this strength quantile
+    tolerance=0.2,                # filter weaker secondary assignments
     min_control_pool_size=5,
     n_bins=4,
     max_candidates_per_target=None,  # optional: keep K closest controls per target
@@ -234,8 +234,10 @@ Internal columns (`_rm_id`, `_treatment`, `_stratum`, `_bin_*`,
 ### Module 9 — tolerance (`tolerance/apply_tolerance.py`)
 
 - Cutoff = `quantile(accepted_strengths, tolerance)`.
-- `tolerance=0` keeps all; `tolerance=0.8` keeps the strongest 20%.
-- Targets with zero kept pairs land in `below`.
+- `tolerance=0` keeps all; `tolerance=0.8` filters weaker secondary pairs.
+- Each target's strongest unique assignment is retained for full-target
+  comparison, even when it is below the cutoff.
+- Retained assignments below the cutoff are labeled `quality_status="low_quality"`.
 
 ### Module 10 — output (`output/assemble.py`)
 
@@ -243,12 +245,15 @@ Internal columns (`_rm_id`, `_treatment`, `_stratum`, `_bin_*`,
 
 | status | meaning |
 |---|---|
-| `matched` | at least one pair survived tolerance |
+| `matched` | at least one unique control assignment was retained |
 | `no_control_available` | stratum had zero control rows |
-| `below_tolerance` | had assignments, all fell below cutoff |
+| `below_tolerance` | had assignments, all fell below cutoff in strict filtering mode |
 | `unmatched` | eligible but lost every control slot to stronger pairs |
 
 `thin_stratum` can be True on a `matched` row.
+Final balance uses the full target group against the available unique controls;
+matched-target-only analysis is not valid. A control-pool warning is emitted when
+the total control count is below the target count.
 
 ---
 

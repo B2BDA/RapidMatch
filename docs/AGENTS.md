@@ -21,7 +21,7 @@ result = ControlMatcher(MatchConfig(
     id_col="id",
     weights={"income": 1.5},
     n=1,
-    tolerance=0.8,           # default: keep strongest 20%
+    tolerance=0.8,           # filter weaker secondary assignments; preserve primary coverage
     min_control_pool_size=5,
     n_bins=4,
     monitor_vars=["tenure"],
@@ -44,7 +44,7 @@ Entry: `ControlMatcher.fit_match` in `rapidmatch/pipeline.py`.
 6. `flag_coverage`: `n_control==0` -> `no_control` (not scored). Thin (`< min_control_pool_size` / ratio) still eligible and still matched; `thin_stratum` is a boolean, not a status.
 7. `_pull(v_stratified)` to Arrow. `target_moments` once on whole target group. `score_all_strata` on eligible keys only.
 8. `greedy_match` global sort by strength desc (stable), no control reuse, `n` slots per target. Occupancy is a dense mask on `_rm_id`, not a Python set.
-9. `apply_tolerance`: cutoff = quantile(accepted strengths, tolerance). `0` keeps all; `0.8` keeps top 20%.
+9. `apply_tolerance`: cutoff = quantile(accepted strengths, tolerance). `0` keeps all; weaker secondary assignments are filtered, but each target's strongest unique assignment is retained for full-target comparison.
 10. `check_balance` (JS cats, KS nums) on match_vars + monitor_vars. Flagged *monitor* groups: `correct_drift` trims weakest matched controls only (no swap-in). Re-check after.
 11. `assemble` then `build_report`.
 
@@ -66,12 +66,15 @@ DuckDB views in order: `udl_data` -> `v_source` -> `v_prepared` -> `v_stratified
 
 | status | meaning |
 |---|---|
-| `matched` | at least one pair survived tolerance |
+| `matched` | at least one unique control assignment was retained |
 | `no_control_available` | stratum had zero control rows |
-| `below_tolerance` | had assignments, all below cutoff |
+| `below_tolerance` | had assignments, all below cutoff in strict filtering mode |
 | `unmatched` | eligible but lost every control slot to stronger pairs |
 
 Every target appears in `result.targets`. Never silently dropped.
+Final balance and downstream analysis compare the full target group against the
+available unique pseudo-control group. A control-pool warning is emitted when
+the number of controls is below the number of targets; controls are never reused.
 
 `MatchResult`: `pairs`, `targets`, `cutoff`, `coverage_summary`, `report`.
 
