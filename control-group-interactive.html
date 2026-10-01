@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Control group matching — interactive walkthrough</title>
+<title>How RiMatch builds a fair control group — interactive walkthrough</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg:#0F0A0A;
@@ -14,13 +14,11 @@
     --border:rgba(255,255,255,0.12); --border-soft:rgba(255,255,255,0.07);
     --ink:#F5EFEC; --ink-muted:rgba(245,239,236,0.60); --ink-faint:rgba(245,239,236,0.38);
     --red:#E4453D; --red-strong:#FF6E63; --red-tint:rgba(228,69,61,0.16); --red-tint-strong:rgba(228,69,61,0.30);
-    --white-glow:#FFFFFF;
-    /* aliases for names the SVG-generating JS still references inline */
-    --teal:var(--red); --teal-strong:var(--red-strong); --brass:var(--red-strong);
-    --surface:rgba(255,255,255,0.14); --surface-2:rgba(255,255,255,0.04);
-    --max:920px;
+    --good:#5BD6A0;
+    --max:960px;
   }
   *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
   body{
     margin:0;background:var(--bg);color:var(--ink);
     font-family:'IBM Plex Sans',sans-serif;font-size:16px;line-height:1.5;
@@ -30,7 +28,7 @@
   .glow.g1{top:-220px;right:-160px;width:520px;height:520px;background:radial-gradient(circle,rgba(228,69,61,0.42),transparent 70%);}
   .glow.g2{bottom:-260px;left:-200px;width:560px;height:560px;background:radial-gradient(circle,rgba(228,69,61,0.22),transparent 70%);}
   .wrap{position:relative;z-index:1;max-width:var(--max);margin:0 auto;padding:0 24px;}
-  h1,h2{font-family:'Fraunces',serif;font-weight:600;margin:0;}
+  h1,h2,h3{font-family:'Fraunces',serif;font-weight:600;margin:0;}
   .mono{font-family:'IBM Plex Mono',monospace;}
   :focus-visible{outline:2px solid var(--red-strong);outline-offset:2px;}
   button{font-family:inherit;cursor:pointer;}
@@ -40,11 +38,112 @@
 
   .glass{background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);box-shadow:0 10px 34px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05);}
 
-  header.page{padding:48px 0 8px;}
-  header.page h1{font-size:clamp(24px,3.4vw,32px);letter-spacing:-0.01em;}
-  header.page p{color:var(--ink-muted);font-size:15px;margin:10px 0 0;max-width:60ch;}
+  /* ---------- scroll progress + scene rail ---------- */
+  #progress{position:fixed;top:0;left:0;width:100%;height:2px;z-index:60;background:rgba(255,255,255,0.05);}
+  #progress .fill{height:100%;width:0;background:linear-gradient(90deg,var(--red),var(--red-strong));box-shadow:0 0 12px var(--red-strong);}
+  .rail{position:fixed;left:16px;top:50%;transform:translateY(-50%);z-index:45;display:flex;flex-direction:column;gap:11px;opacity:0;transition:opacity .5s ease;}
+  .rail.show{opacity:1;}
+  .rail .rd{width:7px;height:7px;padding:0;border:none;border-radius:50%;background:rgba(255,255,255,0.22);position:relative;transition:background .3s ease, transform .3s cubic-bezier(.3,1.4,.5,1), box-shadow .3s ease;}
+  .rail .rd::after{content:'';position:absolute;inset:-6px;border-radius:50%;border:1px solid var(--red-strong);opacity:0;transform:scale(.55);transition:opacity .35s ease, transform .35s cubic-bezier(.3,1.4,.5,1);}
+  .rail .rd:hover{background:var(--ink);transform:scale(1.3);}
+  .rail .rd.active{background:var(--red);box-shadow:0 0 10px rgba(228,69,61,0.85);}
+  .rail .rd.active::after{opacity:1;transform:scale(1);}
+  .rail .rd .tip{position:absolute;left:19px;top:50%;transform:translateY(-50%) translateX(-6px);font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--ink-muted);background:rgba(15,10,10,0.92);border:1px solid var(--border-soft);padding:3px 8px;border-radius:6px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .25s ease, transform .25s ease;}
+  .rail .rd:hover .tip{opacity:1;transform:translateY(-50%) translateX(0);}
+  @media(max-width:760px){.rail{display:none;}}
+  .glow{will-change:transform;}
 
-  details.why{margin:24px 0 8px;border-radius:14px;padding:14px 18px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);box-shadow:0 10px 34px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05);}
+  /* ---------- hero ---------- */
+  .hero{min-height:92vh;display:flex;flex-direction:column;justify-content:center;position:relative;z-index:1;}
+  .hero .kicker{font-family:'IBM Plex Mono',monospace;font-size:12.5px;letter-spacing:0.18em;text-transform:uppercase;color:var(--red-strong);margin-bottom:18px;}
+  .hero h1{font-size:clamp(30px,5vw,52px);letter-spacing:-0.01em;line-height:1.08;max-width:16ch;}
+  .hero p{color:var(--ink-muted);font-size:clamp(15px,1.6vw,17.5px);max-width:58ch;margin:20px 0 0;}
+  .hero .scroll-hint{margin-top:56px;color:var(--ink-faint);font-size:13px;display:flex;align-items:center;gap:10px;}
+  .hero .scroll-hint .chev{width:22px;height:22px;border-right:2px solid var(--red-strong);border-bottom:2px solid var(--red-strong);transform:rotate(45deg);animation:bob 1.6s ease-in-out infinite;}
+  @keyframes bob{0%,100%{transform:rotate(45deg) translate(0,0);opacity:0.5;}50%{transform:rotate(45deg) translate(4px,4px);opacity:1;}}
+  .hero .live-strip{display:flex;gap:26px;margin-top:40px;flex-wrap:wrap;}
+  .hero .live-strip .ls .v{font-family:'Fraunces',serif;font-size:26px;font-weight:600;}
+  .hero .live-strip .ls .k{font-size:12.5px;color:var(--ink-muted);}
+
+  /* hero entrance — .booted is set on body after a forced reflow */
+  .hero .kicker,.hero h1,.hero p,.hero .live-strip,.hero .scroll-hint{opacity:0;transform:translateY(24px);transition:opacity .85s ease, transform .85s cubic-bezier(.3,1,.4,1);}
+  .hero h1{transition:opacity .9s ease, transform .9s cubic-bezier(.3,1,.4,1), letter-spacing .9s cubic-bezier(.3,1,.4,1);}
+  body.booted .hero .kicker{opacity:1;transform:none;transition-delay:.05s;}
+  body.booted .hero h1{opacity:1;transform:none;letter-spacing:-0.026em;transition-delay:.14s;}
+  body.booted .hero p{opacity:1;transform:none;transition-delay:.27s;}
+  body.booted .hero .live-strip{opacity:1;transform:none;transition-delay:.41s;}
+  body.booted .hero .scroll-hint{opacity:1;transform:none;transition-delay:.58s;}
+
+  /* ---------- scenes ---------- */
+  .scene{min-height:100vh;padding:11vh 0;display:flex;align-items:center;position:relative;z-index:1;}
+  .scene-inner{width:100%;transition:opacity .2s ease;}
+  .scene-inner.swapping{opacity:0;}
+  .scene-tag{font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:var(--red-strong);margin-bottom:12px;display:flex;align-items:center;gap:10px;}
+  .scene-tag::before{content:'';width:26px;height:1px;background:var(--red);}
+  .scene h2{font-size:clamp(22px,3vw,30px);margin-bottom:10px;}
+  .scene .lead{color:var(--ink-muted);font-size:15px;max-width:64ch;margin:0 0 22px;}
+  .scene .lead b{color:var(--ink);}
+  .fade-up{opacity:0;transform:translateY(18px);transition:opacity 0.7s ease, transform 0.7s ease;}
+  .scene.in .fade-up{opacity:1;transform:none;}
+  .d1{transition-delay:0.08s;} .d2{transition-delay:0.16s;} .d3{transition-delay:0.24s;} .d4{transition-delay:0.32s;}
+
+  /* scene 0: scan */
+  .scan-stage{position:relative;border-radius:16px;padding:22px;overflow:hidden;}
+  .scan-grid{display:grid;grid-template-columns:repeat(20,1fr);gap:6px;}
+  .scan-cell{aspect-ratio:1;border-radius:4px;background:var(--glass-strong);opacity:0.25;transition:opacity 0.2s, background 0.2s, box-shadow 0.2s;}
+  .scan-cell.scanned{opacity:1;}
+  .scan-cell.scanned.t{background:var(--red);box-shadow:0 0 8px rgba(228,69,61,0.5);}
+  .scan-cell.scanned.c{background:rgba(255,255,255,0.35);}
+  .scanline{position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,transparent,var(--red-strong),transparent);box-shadow:0 0 18px var(--red-strong);opacity:0;pointer-events:none;}
+  .scanline.run{animation:sweep 2.4s ease-in-out forwards;}
+  @keyframes sweep{0%{top:0;opacity:1;}92%{opacity:1;}100%{top:100%;opacity:0;}}
+  .scan-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:20px;}
+  @media(max-width:700px){.scan-stats{grid-template-columns:repeat(2,1fr);}}
+  .stat{border-radius:14px;padding:14px 16px;}
+  .stat .v{font-family:'Fraunces',serif;font-size:28px;font-weight:600;}
+  .stat .v.red{color:var(--red-strong);}
+  .stat .k{font-size:12.5px;color:var(--ink-muted);margin-top:2px;}
+  .capacity-note{margin-top:14px;font-size:13.5px;color:var(--ink-muted);border-left:2px solid var(--red);padding:6px 12px;}
+  .capacity-note b{color:var(--ink);}
+
+  /* scene 1: binning */
+  .numline-box{border-radius:16px;padding:18px 20px;margin-bottom:16px;}
+  .numline-box .nl-title{font-size:13px;font-weight:600;color:var(--ink-muted);margin-bottom:4px;display:flex;justify-content:space-between;}
+  .numline-box .nl-title .mono{color:var(--red-strong);}
+  svg.nl{width:100%;height:86px;display:block;}
+  svg.nl text{font-family:'IBM Plex Mono',monospace;font-size:9.5px;fill:var(--ink-muted);}
+  .nl-dot{transition:transform 0.8s cubic-bezier(.4,1.4,.6,1), opacity 0.5s;}
+  .nl-edge{stroke:var(--red-strong);stroke-width:1.5;stroke-dasharray:4,3;opacity:0;transition:opacity 0.6s;}
+  .scene.in .nl-edge{opacity:0.9;}
+  .nl-edge-label{opacity:0;transition:opacity 0.6s 0.3s;}
+  .scene.in .nl-edge-label{opacity:1;}
+  .strata-block{margin-top:20px;}
+  .strata-block h3{font-size:14px;font-weight:600;margin-bottom:10px;color:var(--ink-muted);font-family:'IBM Plex Sans',sans-serif;}
+  .strata-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
+  .stratum-card{border-radius:12px;padding:10px 12px;background:var(--glass);border:1px solid var(--border-soft);opacity:0;transform:translateY(10px) scale(0.97);transition:opacity 0.45s,transform 0.45s,border-color 0.3s,box-shadow 0.3s;}
+  .scene.in .stratum-card{opacity:1;transform:none;}
+  .stratum-card .sk{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-muted);margin-bottom:6px;}
+  .stratum-card .cnt{font-size:12px;margin-bottom:6px;}
+  .stratum-card .cnt .rt{color:var(--red-strong);font-weight:600;}
+  .stratum-card.no-ctl{border-color:var(--red);box-shadow:0 0 14px rgba(228,69,61,0.25);}
+  .stratum-card.no-ctl .stamp{color:var(--red-strong);font-size:11px;font-weight:600;}
+  .stratum-card.thin .stamp{color:#E8B93D;font-size:11px;font-weight:600;}
+  .sdots{display:flex;flex-wrap:wrap;gap:3px;}
+  .sdot{width:7px;height:7px;border-radius:50%;}
+  .sdot.t{background:var(--red);box-shadow:0 0 5px rgba(228,69,61,0.6);}
+  .sdot.c{background:rgba(255,255,255,0.30);}
+
+  /* scene 2: z-score */
+  .zmorph{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:16px;}
+  .zcard{border-radius:12px;padding:12px 14px;background:var(--glass);border:1px solid var(--border-soft);font-size:13.5px;opacity:0;transform:translateY(12px);transition:opacity 0.5s,transform 0.5s;}
+  .scene.in .zcard{opacity:1;transform:none;}
+  .zcard .who{font-weight:600;margin-bottom:4px;}
+  .zcard .mono{color:var(--red-strong);font-size:12.5px;}
+  .zcard .arrow{color:var(--ink-faint);margin:0 6px;}
+  .formula-box{border-radius:14px;padding:16px 18px;margin:16px 0;font-size:14.5px;background:linear-gradient(180deg,var(--glass),rgba(255,255,255,0.02));border:1px solid var(--border-soft);}
+  .formula-box .line{margin:5px 0;color:var(--ink);}
+  .formula-box .mono{color:var(--red-strong);}
+  details.why{margin:22px 0 0;border-radius:14px;padding:14px 18px;background:linear-gradient(180deg,var(--glass),rgba(255,255,255,0.02));border:1px solid var(--border-soft);}
   details.why summary{cursor:pointer;font-weight:600;font-size:14.5px;list-style:none;display:flex;align-items:center;gap:8px;color:var(--ink);}
   details.why summary::-webkit-details-marker{display:none;}
   details.why summary::before{content:'+';color:var(--red-strong);font-size:18px;line-height:1;width:16px;}
@@ -60,187 +159,265 @@
   .winner{background:var(--red-tint);}
   .why-note{font-size:13px;color:var(--ink-muted);margin-top:10px;}
 
-  .stepper{display:flex;gap:6px;margin:32px 0 4px;border-bottom:1px solid var(--border-soft);}
-  .stepper button{background:none;border:none;padding:12px 4px;margin-right:22px;font-size:15px;font-weight:600;color:var(--ink-muted);position:relative;}
-  .stepper button .n{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--glass-strong);font-size:12px;margin-right:8px;color:var(--ink-muted);}
-  .stepper button.active{color:var(--ink);}
-  .stepper button.active .n{background:var(--red);color:#fff;}
-  .stepper button.active::after{content:'';position:absolute;left:0;right:22px;bottom:-1px;height:2px;background:var(--red);box-shadow:0 0 10px var(--red);}
+  /* scene 3: distance scatter */
+  .scatter-layout{display:grid;grid-template-columns:1.15fr 0.85fr;gap:18px;align-items:start;}
+  @media(max-width:800px){.scatter-layout{grid-template-columns:1fr;}}
+  .scatter-box{border-radius:16px;padding:14px;}
+  svg.scatter{width:100%;height:auto;display:block;}
+  svg.scatter text{font-family:'IBM Plex Mono',monospace;font-size:10px;fill:var(--ink-muted);}
+  .pt{cursor:default;transition:opacity 0.3s;}
+  .pt.t{fill:var(--red);cursor:pointer;}
+  .pt.c{fill:rgba(255,255,255,0.28);}
+  .pt.cand{fill:rgba(255,255,255,0.85);stroke:var(--red-strong);stroke-width:1;}
+  .pt.focus{fill:var(--red-strong);stroke:#fff;stroke-width:1.5;filter:drop-shadow(0 0 6px rgba(255,110,99,0.8));}
+  .pt.dim{opacity:0.14;}
+  .dline{stroke:var(--red-strong);stroke-width:1.4;opacity:0.75;}
+  .axis{stroke:var(--border);stroke-width:1;}
+  .cand-list{display:flex;flex-direction:column;gap:7px;}
+  .cand-row{display:flex;align-items:center;gap:10px;font-size:13px;padding:7px 10px;border-radius:9px;background:var(--glass);border:1px solid var(--border-soft);opacity:0;transform:translateX(14px);transition:opacity 0.4s,transform 0.4s;}
+  .cand-row.show{opacity:1;transform:none;}
+  .cand-row .cid{font-weight:600;width:36px;flex:none;}
+  .cand-row .bar-track{flex:1;height:9px;background:var(--glass-strong);border-radius:5px;overflow:hidden;}
+  .cand-row .bar-fill{height:100%;background:var(--red);border-radius:5px;width:0;transition:width 0.6s cubic-bezier(.3,1,.4,1);box-shadow:0 0 8px rgba(228,69,61,0.5);}
+  .cand-row .sv{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-muted);width:106px;text-align:right;flex:none;white-space:nowrap;}
+  .cand-row.best{border-color:var(--red);}
+  .cand-row.best .sv{color:var(--red-strong);font-weight:600;}
+  .cand-row.cut{opacity:0.28 !important;transform:none !important;}
+  .cand-row.cut .bar-fill{background:var(--ink-faint);box-shadow:none;}
+  .cand-row.cut .cid{text-decoration:line-through;}
 
-  .stage{padding:26px 0 70px;}
-  .stage-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
-  .stage-head h2{font-size:20px;}
-  .stage-head .hint{font-size:13.5px;color:var(--ink-muted);}
-
-  .chip{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:999px;font-size:13px;font-weight:600;border:1px solid var(--border-soft);background:var(--glass);margin:3px;color:var(--ink-muted);}
-  .chip.target{background:var(--red);color:#fff;border-color:var(--red);cursor:pointer;box-shadow:0 0 14px rgba(228,69,61,0.35);}
-  .chip.target.selected{outline:2px solid var(--white-glow);outline-offset:2px;}
-  .chip.control{color:var(--ink-muted);}
-  .chip .r{font-size:10px;opacity:0.75;}
-
-  .strata-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  @media(max-width:640px){.strata-grid{grid-template-columns:1fr;}}
-  .stratum-card{border-radius:14px;padding:16px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);}
-  .stratum-card.has-selected{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset, 0 0 20px rgba(228,69,61,0.18);}
-  .stratum-card .title{font-size:13px;font-weight:600;margin-bottom:4px;color:var(--ink);}
-  .stratum-card .count{font-size:12.5px;color:var(--ink-muted);margin-bottom:10px;}
-  .stratum-card .count.warn{color:var(--red-strong);}
-  .edge-note{font-size:13.5px;color:var(--ink-muted);margin:0 0 16px;}
-  .edge-note b{color:var(--ink);}
-
-  .target-strip{margin-bottom:18px;}
-  .formula-box{border-radius:14px;padding:16px 18px;margin-bottom:18px;font-size:14.5px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);}
-  .formula-box .line{margin:4px 0;color:var(--ink);}
-  .formula-box .mono{color:var(--red-strong);}
-  table.dist{width:100%;border-collapse:collapse;font-size:14px;}
-  table.dist th{text-align:left;color:var(--ink-muted);font-size:12.5px;font-weight:600;padding:0 8px 8px 0;border-bottom:1px solid var(--border-soft);}
-  table.dist td{padding:8px 8px 8px 0;border-bottom:1px solid var(--border-soft);color:var(--ink);}
-  table.dist tr.best td{font-weight:600;background:var(--red-tint);}
-  .empty-note{font-size:14px;color:var(--red-strong);background:var(--red-tint);padding:12px 14px;border-radius:10px;border:1px solid var(--red-tint-strong);}
-
-  .controls-row{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
-  .btn{border:1px solid var(--border);background:var(--glass);border-radius:8px;padding:8px 14px;font-size:13.5px;font-weight:600;color:var(--ink);}
+  /* scene 5: greedy */
+  .greedy-layout{display:grid;grid-template-columns:0.9fr 1.1fr;gap:18px;align-items:start;}
+  @media(max-width:800px){.greedy-layout{grid-template-columns:1fr;}}
+  .pair-list{max-height:430px;overflow-y:auto;border-radius:12px;border:1px solid var(--border-soft);background:rgba(255,255,255,0.02);padding:6px;}
+  .pair-row{display:flex;align-items:center;gap:8px;font-size:12.5px;font-family:'IBM Plex Mono',monospace;padding:5px 8px;border-radius:7px;color:var(--ink-faint);transition:background 0.25s,color 0.25s;}
+  .pair-row .rk{width:26px;flex:none;color:var(--ink-faint);}
+  .pair-row .who{width:74px;flex:none;}
+  .pair-row .ss{width:52px;flex:none;text-align:right;}
+  .pair-row .st{flex:1;text-align:right;font-family:'IBM Plex Sans',sans-serif;font-size:12px;}
+  .pair-row.cursor{background:var(--glass-strong);color:var(--ink);}
+  .pair-row.done-yes{color:var(--ink);}
+  .pair-row.done-yes .st{color:var(--red-strong);font-weight:600;}
+  .pair-row.done-no{color:var(--ink-faint);}
+  .pair-row.done-no .who,.pair-row.done-no .ss{opacity:0.5;}
+  .bimap-box{border-radius:16px;padding:12px;}
+  svg.bimap{width:100%;height:auto;display:block;}
+  svg.bimap text{font-family:'IBM Plex Mono',monospace;font-size:9px;fill:var(--ink-faint);}
+  .bm-line{fill:none;stroke:var(--red);stroke-width:1.3;opacity:0.65;}
+  .bm-dot-t{fill:var(--red);}
+  .bm-dot-c{fill:rgba(255,255,255,0.30);}
+  .bm-dot-c.used{fill:#fff;stroke:var(--red-strong);stroke-width:1;}
+  .bm-dot-t.matched{stroke:#fff;stroke-width:1;}
+  .play-row{display:flex;gap:8px;align-items:center;margin:14px 0;flex-wrap:wrap;}
+  .btn{border:1px solid var(--border);background:var(--glass);border-radius:8px;padding:8px 14px;font-size:13.5px;font-weight:600;color:var(--ink);transition:background 0.2s;}
+  .btn:hover{background:var(--glass-strong);}
   .btn.primary{background:var(--red);border-color:var(--red);color:#fff;box-shadow:0 0 16px rgba(228,69,61,0.35);}
   .btn:disabled{opacity:0.35;cursor:default;box-shadow:none;}
-  .step-caption{font-size:14px;border-radius:10px;padding:10px 14px;margin-bottom:16px;min-height:20px;background:var(--glass);border:1px solid var(--border-soft);color:var(--ink);}
-  .step-caption.assigned{border-color:var(--red);background:var(--red-tint);}
-  .step-caption.skipped{border-color:var(--border);color:var(--ink-muted);}
-  table.match{width:100%;border-collapse:collapse;font-size:13.5px;}
-  table.match th{text-align:left;color:var(--ink-muted);font-size:12px;font-weight:600;padding:0 6px 6px 0;border-bottom:1px solid var(--border-soft);}
-  table.match td{padding:6px 6px 6px 0;border-bottom:1px solid var(--border-soft);color:var(--ink);}
-  table.match tr.pending td{color:var(--ink-faint);}
-  table.match tr.assigned td{color:var(--red-strong);}
-  table.match tr.skipped .status{color:var(--ink-faint);}
-  .match-wrap{max-height:320px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:10px;padding:0 12px;background:rgba(255,255,255,0.02);}
-  .match-wrap table{margin:0;}
+  .hint{font-size:13px;color:var(--ink-muted);}
+  .live-count{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-muted);}
 
-  svg.numline{width:100%;height:150px;border-radius:14px;margin-top:16px;background:var(--glass);border:1px solid var(--border-soft);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);}
-  svg.numline text{font-family:'IBM Plex Sans';font-size:9px;fill:var(--ink-muted);}
-  svg.numline .lane-label{font-size:10px;font-weight:600;fill:var(--ink-muted);}
+  /* scene 6: tolerance strip */
+  .strip-box{border-radius:16px;padding:20px;position:relative;}
+  svg.strip{width:100%;height:150px;display:block;}
+  svg.strip text{font-family:'IBM Plex Mono',monospace;font-size:10px;fill:var(--ink-muted);}
+  .strip-dot{transition:opacity 0.5s, transform 0.5s;}
+  .cutline{stroke:var(--red-strong);stroke-width:2;stroke-dasharray:5,4;}
+  .tol-stats{display:flex;gap:26px;margin-top:14px;flex-wrap:wrap;}
+  .tol-stats .ls .v{font-family:'Fraunces',serif;font-size:24px;font-weight:600;}
+  .tol-stats .ls .v.red{color:var(--red-strong);}
+  .tol-stats .ls .k{font-size:12.5px;color:var(--ink-muted);}
+  .tag{display:inline-block;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:999px;background:var(--red-tint);color:var(--red-strong);border:1px solid var(--red-tint-strong);}
 
-  .verify-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px;}
-  @media(max-width:640px){.verify-stats{grid-template-columns:1fr;}}
-  .vstat{border-radius:14px;padding:16px 18px;background:linear-gradient(180deg, var(--glass), rgba(255,255,255,0.02));border:1px solid var(--border-soft);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);}
-  .vstat .n{font-family:'Fraunces',serif;font-size:26px;font-weight:600;color:var(--ink);}
-  .vstat .d{font-size:13px;color:var(--ink-muted);margin-top:2px;}
-  .vstat.matched{border-color:var(--red);box-shadow:0 0 20px rgba(228,69,61,0.15);}
-  .vstat.matched .n{color:var(--red-strong);}
-  .vstat.naive .n{color:var(--ink-faint);}
-  .ks-row{margin-top:22px;}
-  .ks-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
-  .ks-bar .who{width:70px;font-size:13px;color:var(--ink-muted);flex:none;}
-  .ks-track{flex:1;height:12px;background:var(--glass-strong);border-radius:6px;overflow:hidden;}
-  .ks-fill{height:100%;border-radius:6px;}
-  .ks-fill.matched{background:var(--red);box-shadow:0 0 10px rgba(228,69,61,0.5);}
-  .ks-fill.naive{background:var(--ink-faint);}
-  .ks-bar .val{width:50px;text-align:right;font-size:13px;color:var(--ink-muted);flex:none;}
-  .coverage-note{font-size:14px;color:var(--ink-muted);margin-top:22px;}
-  .coverage-note b{color:var(--ink);}
+  /* scene 7/8: balance bars, drift */
+  .bal-grid{display:flex;flex-direction:column;gap:14px;}
+  .bal-row{border-radius:12px;padding:12px 16px;background:var(--glass);border:1px solid var(--border-soft);}
+  .bal-row .bh{display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:8px;}
+  .bal-row .bh .vn{font-weight:600;}
+  .bal-row .bh .kind{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--ink-muted);}
+  .bal-row.flagged{border-color:var(--red);box-shadow:0 0 14px rgba(228,69,61,0.18);}
+  .bal-row.flagged .flag{color:var(--red-strong);font-weight:600;font-size:12px;}
+  .bal-bars{display:flex;flex-direction:column;gap:6px;}
+  .bal-bar{display:flex;align-items:center;gap:10px;}
+  .bal-bar .who{width:118px;font-size:12px;color:var(--ink-muted);flex:none;text-align:right;}
+  .bal-bar .track{flex:1;height:11px;background:var(--glass-strong);border-radius:6px;overflow:hidden;}
+  .bal-bar .fill{height:100%;border-radius:6px;width:0;transition:width 0.9s cubic-bezier(.3,1,.4,1);}
+  .bal-bar .fill.m{background:var(--red);box-shadow:0 0 10px rgba(228,69,61,0.5);}
+  .bal-bar .fill.n{background:var(--ink-faint);}
+  .bal-bar .fill.a{background:var(--good);box-shadow:0 0 10px rgba(91,214,160,0.4);}
+  .bal-bar .val{width:52px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-muted);flex:none;}
+  .thresh-note{font-size:12px;color:var(--ink-faint);margin-top:6px;}
+  .drift-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}
+  .drift-table th{text-align:left;color:var(--ink-muted);font-weight:600;font-size:12px;padding:0 8px 7px 0;border-bottom:1px solid var(--border-soft);}
+  .drift-table td{padding:7px 8px 7px 0;border-bottom:1px solid var(--border-soft);font-family:'IBM Plex Mono',monospace;font-size:12.5px;}
+  .drift-table tr.trim-row{transition:opacity 0.5s,background 0.5s;}
+  .drift-table tr.trimmed{opacity:0.3;text-decoration:line-through;}
+  .ks-big{display:flex;gap:26px;margin:16px 0;flex-wrap:wrap;}
+  .ks-big .ls .v{font-family:'Fraunces',serif;font-size:30px;font-weight:600;}
+  .ks-big .ls .v.red{color:var(--red-strong);}
+  .ks-big .ls .v.green{color:var(--good);}
+  .ks-big .ls .k{font-size:12.5px;color:var(--ink-muted);}
+  .share-bars{display:flex;gap:14px;align-items:flex-end;height:130px;margin-top:10px;}
+  .share-bin{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;height:100%;}
+  .share-bin .pair{display:flex;gap:4px;align-items:flex-end;height:100%;}
+  .share-bin .col{width:16px;border-radius:4px 4px 0 0;height:0;transition:height 0.8s cubic-bezier(.3,1,.4,1);}
+  .share-bin .col.t{background:var(--red);}
+  .share-bin .col.c{background:rgba(255,255,255,0.30);}
+  .share-bin.over .col.c{background:#E8B93D;}
+  .share-bin .bl{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--ink-faint);}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--ink-muted);margin-top:8px;}
+  .legend .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;}
 
-  footer{padding:30px 0 60px;border-top:1px solid var(--border-soft);}
-  footer p{font-size:13px;color:var(--ink-muted);margin:0;}
+  /* footer */
+  footer{padding:40px 0 70px;border-top:1px solid var(--border-soft);position:relative;z-index:1;}
+  footer .fin{display:flex;gap:30px;flex-wrap:wrap;margin-bottom:18px;}
+  footer .fin .ls .v{font-family:'Fraunces',serif;font-size:26px;font-weight:600;color:var(--red-strong);}
+  footer .fin .ls .v .sep{color:var(--ink-faint);}
+  footer .fin .ls .k{font-size:12.5px;color:var(--ink-muted);}
+  footer p{font-size:13px;color:var(--ink-muted);margin:6px 0 0;}
+
+  /* ---------- control panel ---------- */
+  .panel-toggle{position:fixed;right:18px;bottom:18px;z-index:50;border:1px solid var(--red);background:var(--red);color:#fff;border-radius:999px;padding:11px 18px;font-size:13.5px;font-weight:600;box-shadow:0 6px 24px rgba(228,69,61,0.45);}
+  .panel{position:fixed;top:50%;right:18px;transform:translateY(-50%) translateX(calc(100% + 30px));z-index:49;width:280px;border-radius:16px;padding:18px 20px;transition:transform 0.35s cubic-bezier(.3,1,.4,1);}
+  .panel.open{transform:translateY(-50%) translateX(0);}
+  .panel h3{font-family:'IBM Plex Sans',sans-serif;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-muted);margin:0 0 12px;}
+  .panel .ctl{margin-bottom:14px;}
+  .panel .ctl label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-muted);margin-bottom:5px;}
+  .panel .ctl label .mono{color:var(--red-strong);font-size:12px;}
+  .panel input[type=range]{width:100%;accent-color:var(--red);height:20px;}
+  .panel .pulse{font-size:11.5px;color:var(--good);height:16px;opacity:0;transition:opacity 0.3s;}
+  .panel .pulse.on{opacity:1;}
+  .panel .reset-link{font-size:12px;color:var(--ink-muted);background:none;border:none;text-decoration:underline;padding:0;}
+  @media(max-width:900px){
+    .panel{top:auto;bottom:74px;right:14px;left:14px;width:auto;transform:translateY(20px);opacity:0;pointer-events:none;}
+    .panel.open{transform:none;opacity:1;pointer-events:auto;}
+  }
+  /* ---------- interaction polish ---------- */
+  .scene h2{position:relative;}
+  .scene h2::after{content:'';position:absolute;left:0;bottom:-7px;height:1px;width:0;background:linear-gradient(90deg,var(--red),transparent);transition:width 1.1s cubic-bezier(.3,1,.4,1) .35s;}
+  .scene.in h2::after{width:130px;}
+
+  .stat{transition:transform .32s cubic-bezier(.3,1,.4,1), box-shadow .32s ease;}
+  .stat:hover{transform:translateY(-3px);box-shadow:0 16px 42px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08);}
+  .scene.in .stratum-card:hover{transform:translateY(-3px);border-color:var(--border);transition:opacity .45s, transform .2s cubic-bezier(.3,1,.4,1), border-color .3s, box-shadow .3s;}
+  .stratum-card.no-ctl:hover{border-color:var(--red);}
+  .bal-row{transition:transform .3s cubic-bezier(.3,1,.4,1), background .3s ease, border-color .3s ease;}
+  .bal-row:hover{transform:translateX(2px);background:var(--glass-strong);}
+
+  .pt{transform-box:fill-box;transform-origin:center;transition:opacity .3s, transform .28s cubic-bezier(.3,1.5,.5,1);}
+  .pt.cand:hover{transform:scale(1.55);}
+  .pt.t:hover{transform:scale(1.35);}
+  .pt.pop{transform:scale(2);}
+  .pt.focus{animation:focusPulse 2.4s ease-in-out infinite;}
+  @keyframes focusPulse{
+    0%,100%{filter:drop-shadow(0 0 4px rgba(255,110,99,0.45));}
+    50%{filter:drop-shadow(0 0 13px rgba(255,110,99,1));}
+  }
+  .bm-dot-t,.bm-dot-c{transition:r .3s cubic-bezier(.3,1.4,.5,1), fill .3s ease, stroke .3s ease;}
+
+  .btn{transition:background .2s, transform .18s cubic-bezier(.3,1.4,.5,1), box-shadow .2s;}
+  .btn:hover{transform:translateY(-2px);}
+  .btn:active{transform:translateY(0) scale(.97);}
+  .why-toggle button{transition:background .25s, color .25s, transform .2s cubic-bezier(.3,1.4,.5,1);}
+  .why-toggle button:not(.active):hover{background:var(--glass-strong);color:var(--ink);transform:translateY(-1px);}
+  .panel-toggle{transition:transform .2s cubic-bezier(.3,1.4,.5,1), box-shadow .3s ease;}
+  .panel-toggle:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(228,69,61,0.6);}
+  .panel-toggle:active{transform:translateY(0) scale(.97);}
+  .pair-row.cursor.done-yes{background:var(--red-tint);}
+
+  #footerInner{transition:opacity .2s ease;}
+  #footerInner.swapping{opacity:0;}
+
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation:none !important;transition:none !important;}
+    html{scroll-behavior:auto;}
+  }
 </style>
 </head>
 <body>
 <div class="glow g1"></div>
 <div class="glow g2"></div>
-<div class="wrap">
 
-  <header class="page">
+<div id="progress" aria-hidden="true"><div class="fill" id="progFill"></div></div>
+<nav class="rail" id="rail" aria-label="scene navigation"></nav>
+
+<button class="panel-toggle" id="panelToggle">Tune the engine</button>
+<aside class="panel glass" id="panel">
+  <h3>MatchConfig — live</h3>
+  <div class="ctl"><label>weight · income <span class="mono" id="vWInc">1.0</span></label>
+    <input type="range" id="sWInc" min="0.2" max="3" step="0.1" value="1"></div>
+  <div class="ctl"><label>weight · tenure <span class="mono" id="vWTen">1.0</span></label>
+    <input type="range" id="sWTen" min="0.2" max="3" step="0.1" value="1"></div>
+  <div class="ctl"><label>n_bins <span class="mono" id="vNBins">3</span></label>
+    <input type="range" id="sNBins" min="2" max="5" step="1" value="3"></div>
+  <div class="ctl"><label>max candidates / target <span class="mono" id="vCap">All</span></label>
+    <input type="range" id="sCap" min="1" max="9" step="1" value="9"></div>
+  <div class="ctl"><label>tolerance <span class="mono" id="vTol">0.80</span></label>
+    <input type="range" id="sTol" min="0" max="1" step="0.05" value="0.8"></div>
+  <div class="pulse" id="pulse">recomputed — scenes updated</div>
+  <button class="reset-link" id="resetCfg">reset to engine defaults</button>
+</aside>
+
+<div class="wrap">
+  <header class="hero">
+    <div class="kicker">RiMatch · explainable control-group matching</div>
     <h1>How we build a fair control group</h1>
-    <p>16 customers. 6 were targeted by a campaign, 10 weren't. Click through to watch the actual grouping, scoring, and matching happen — no black box, no hidden steps.</p>
+    <p>80 customers. 30 were targeted by a campaign, 50 weren't. Scroll to watch the actual engine work — scan, bin, standardize, score, match, verify, correct. Every number on this page is computed live in your browser by the same rules as the <span class="mono">rapidmatch</span> Python package. No black box.</p>
+    <div class="live-strip" id="heroStrip"></div>
+    <div class="scroll-hint"><span class="chev"></span> scroll to start the scan</div>
   </header>
 
-  <details class="why">
-    <summary>Why not just random sampling or raw distance?</summary>
-    <div class="why-body">
-      <div class="why-toggle">
-        <button id="btnRaw" class="active">Raw distance</button>
-        <button id="btnStd">Standardized distance</button>
-      </div>
-      <table class="why-tbl" id="whyTable"></table>
-      <p class="why-note" id="whyNote"></p>
-    </div>
-  </details>
-
-  <nav class="stepper" id="stepper">
-    <button data-stage="group"><span class="n">1</span>Group</button>
-    <button data-stage="score"><span class="n">2</span>Score</button>
-    <button data-stage="match"><span class="n">3</span>Match</button>
-    <button data-stage="verify"><span class="n">4</span>Verify</button>
-    <button data-stage="correct"><span class="n">5</span>Correct</button>
-  </nav>
-
-  <div class="stage" id="stageContent"></div>
-
+  <section class="scene" id="sc0"><div class="scene-inner" id="sc0-inner"></div></section>
+  <section class="scene" id="sc1"><div class="scene-inner" id="sc1-inner"></div></section>
+  <section class="scene" id="sc2"><div class="scene-inner" id="sc2-inner"></div></section>
+  <section class="scene" id="sc3"><div class="scene-inner" id="sc3-inner"></div></section>
+  <section class="scene" id="sc4"><div class="scene-inner" id="sc4-inner"></div></section>
+  <section class="scene" id="sc5"><div class="scene-inner" id="sc5-inner"></div></section>
+  <section class="scene" id="sc6"><div class="scene-inner" id="sc6-inner"></div></section>
+  <section class="scene" id="sc7"><div class="scene-inner" id="sc7-inner"></div></section>
+  <section class="scene" id="sc8"><div class="scene-inner" id="sc8-inner"></div></section>
 </div>
 
-<footer>
-  <div class="wrap"><p>Live-computed on the 16 customers shown above — every number on this page is calculated in your browser, not pre-written.</p></div>
-</footer>
+<footer><div class="wrap" id="footerInner"></div></footer>
 
 <script>
-const TARGET = [
-  ['T1','North',82,7], ['T2','South',91,5], ['T3','North',76,8],
-  ['T4','North',68,6], ['T5','South',95,4], ['T6','North',71,7],
-];
-const CONTROL = [
-  ['C1','North',60,2], ['C2','South',40,6], ['C3','North',45,9],
-  ['C4','South',90,2], ['C5','North',70,8], ['C6','South',55,5],
-  ['C7','North',60,3], ['C8','South',93,2], ['C9','North',35,10],
-  ['C10','South',65,4],
-];
+'use strict';
+/* ================================================================
+   RiMatch interactive explainer — live engine re-implementation.
+   Mirrors rapidmatch modules: 2 profile · 5 bin/stratify · 7 score
+   · 8 greedy · 9 tolerance · 11 balance · 12 drift (trim-only).
+   Parity conventions copied from the Python source:
+   - bin edges: quantile_cont (linear interp) on TARGET rows only
+   - bucket: value <= edge_i -> bin i, else last bin
+   - moments: population std (ddof=0) on target group; std 0 -> 1
+   - a_k = w_k * z_k; d = sqrt(sum (a_k-b_k)^2); strength = exp(-d)
+   - candidate cap: K strongest controls per target
+   - greedy: stable strength-desc sort, no control reuse, n = 1
+   - tolerance: cutoff = quantile(accepted strengths, tol);
+     each target's strongest assignment is preserved (low_quality)
+   - KS: max |F_t - F_c| over pooled support
+   - JS: divergence form (not sqrt), natural log
+   - drift: target-quantile bins, excess = floor((cs-ts)*n_c),
+     trim weakest match_strength first, never swap in
+   ================================================================ */
 
-function median(arr){ const s=[...arr].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
-const targetIncomes = TARGET.map(t=>t[2]);
-const EDGE = median(targetIncomes);
-const bucket = inc => inc<=EDGE?0:1;
-const stratumKey = (region,inc) => `${bucket(inc)}-${region[0]}`;
-const MEAN = targetIncomes.reduce((a,b)=>a+b,0)/targetIncomes.length;
-const VAR = targetIncomes.reduce((a,b)=>a+(b-MEAN)**2,0)/targetIncomes.length;
-const STD = Math.sqrt(VAR);
-const z = inc => (inc-MEAN)/STD;
-
-const tById = Object.fromEntries(TARGET.map(t=>[t[0],{id:t[0],region:t[1],income:t[2],tenure:t[3],stratum:stratumKey(t[1],t[2])}]));
-const cById = Object.fromEntries(CONTROL.map(c=>[c[0],{id:c[0],region:c[1],income:c[2],tenure:c[3],stratum:stratumKey(c[1],c[2])}]));
-
-const STRATA = {};
-['0-N','1-N','0-S','1-S'].forEach(k=>STRATA[k]={targets:[],controls:[]});
-Object.values(tById).forEach(t=>STRATA[t.stratum].targets.push(t.id));
-Object.values(cById).forEach(c=>STRATA[c.stratum].controls.push(c.id));
-
-let CANDIDATES = [];
-Object.values(tById).forEach(t=>{
-  Object.values(cById).forEach(c=>{
-    if(t.stratum===c.stratum){
-      const d = Math.abs(z(t.income)-z(c.income));
-      CANDIDATES.push({tid:t.id, cid:c.id, d, s:Math.exp(-d)});
-    }
-  });
+// reduced-motion is resolved live, not snapshotted at load — flipping the OS
+// setting takes effect without a reload. RM_REDUCED is what the rest of the file reads.
+const RM_QUERY = window.matchMedia('(prefers-reduced-motion: reduce)');
+let RM_REDUCED = RM_QUERY.matches;
+document.documentElement.classList.toggle('rm-reduced', RM_REDUCED);
+RM_QUERY.addEventListener('change', e => {
+  RM_REDUCED = e.matches;
+  document.documentElement.classList.toggle('rm-reduced', RM_REDUCED);
+  resetGlowParallax();
+  clearTimersForAllScenes();
+  // re-render + replay so every scene lands on its final frame instantly
+  for(const n of [0, 1, 2, 3, 4, 5, 6, 7, 8]) SCENES[n].render();
+  renderFooter();
+  for(const n of visibleScenes){ if(n > 0 && SCENES[n]) SCENES[n].play(); }
+  if(footerInView()) animateFooter();
 });
-CANDIDATES.sort((a,b)=>b.s-a.s);
 
-function runGreedy(list){
-  const usedT=new Set(), usedC=new Set(), assigned=[];
-  for(const c of list){
-    if(usedT.has(c.tid)||usedC.has(c.cid)) continue;
-    usedT.add(c.tid); usedC.add(c.cid); assigned.push(c);
-  }
-  return {usedT, usedC, assigned};
-}
-const FULL = runGreedy(CANDIDATES);
 
-function ecdfAt(arr,x){ return arr.filter(v=>v<=x).length/arr.length; }
-function ksStat(a,b){ let max=0; for(const x of [...a,...b]){ const d=Math.abs(ecdfAt(a,x)-ecdfAt(b,x)); if(d>max) max=d; } return max; }
-
-// round-half-to-even (banker's rounding) -- matches Python's round(), used by
-// the real drift-correction module so this demo stays faithful to it
-function roundHalfEven(x){
-  const f = Math.floor(x), diff = x-f;
-  if(diff<0.5) return f;
-  if(diff>0.5) return f+1;
-  return f%2===0 ? f : f+1;
-}
 function mulberry32(a){
   return function(){
     a |= 0; a = a + 0x6D2B79F5 | 0;
@@ -249,287 +426,1086 @@ function mulberry32(a){
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
 }
-function seededShuffle(arr, seed){
-  const rng = mulberry32(seed);
-  const a = [...arr];
-  for(let i=a.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+
+/* ---------------- population (deterministic, seeded) ---------------- */
+function genPopulation(){
+  const rng = mulberry32(20261001);
+  const gauss = (mu, sd) => {
+    let u = 0; while(u === 0) u = rng();
+    const v = rng();
+    return mu + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  };
+  const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+  const rows = []; let rm = 1;
+  for(let i = 1; i <= 30; i++){
+    rows.push({ rm: rm++, id: 'T' + i, t: 1,
+      region: rng() < 0.60 ? 'North' : 'South',
+      income: Math.round(clamp(gauss(88, 9), 55, 120)),
+      tenure: Math.round(clamp(gauss(7.5, 1.6), 2, 12) * 10) / 10,
+      visits: Math.round(clamp(gauss(15, 3), 4, 25)) });
+  }
+  for(let i = 1; i <= 50; i++){
+    rows.push({ rm: rm++, id: 'C' + i, t: 0,
+      region: rng() < 0.45 ? 'North' : 'South',
+      income: Math.round(clamp(gauss(64, 13), 30, 115)),
+      tenure: Math.round(clamp(gauss(4.8, 2.3), 0.5, 12) * 10) / 10,
+      visits: Math.round(clamp(gauss(9.5, 4), 1, 25)) });
+  }
+  return rows;
+}
+const POP = genPopulation();
+
+/* ---------------- engine primitives ---------------- */
+function quantileCont(sortedVals, q){
+  const n = sortedVals.length;
+  if(n === 0) return 0;
+  if(n === 1) return sortedVals[0];
+  const pos = q * (n - 1);
+  const lo = Math.floor(pos), hi = Math.ceil(pos);
+  const f = pos - lo;
+  return sortedVals[lo] * (1 - f) + sortedVals[hi] * f;
+}
+function edgesOf(targetVals, nBins){
+  const s = [...targetVals].sort((a, b) => a - b);
+  const out = [];
+  for(let i = 1; i < nBins; i++) out.push(quantileCont(s, i / nBins));
+  return out;
+}
+function bucketOf(v, edges){
+  let i = 0;
+  while(i < edges.length && v > edges[i]) i++;
+  return i;
+}
+function mean(a){ return a.reduce((x, y) => x + y, 0) / a.length; }
+function pstd(a){
+  const m = mean(a);
+  return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / a.length);
+}
+function ksStat(a, b){
+  if(!a.length || !b.length) return 0;
+  const x = [...a].sort((p, q) => p - q), y = [...b].sort((p, q) => p - q);
+  const vals = x.concat(y);
+  let max = 0;
+  const rank = (arr, v) => { // searchsorted side='right'
+    let lo = 0, hi = arr.length;
+    while(lo < hi){ const mid = (lo + hi) >> 1; if(arr[mid] <= v) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  for(const v of vals){
+    const d = Math.abs(rank(x, v) / x.length - rank(y, v) / y.length);
+    if(d > max) max = d;
+  }
+  return max;
+}
+function jsDistance(a, b){
+  if(!a.length || !b.length) return 0;
+  const labels = [...new Set(a.concat(b))].sort();
+  const p = labels.map(l => a.filter(v => v === l).length / a.length);
+  const q = labels.map(l => b.filter(v => v === l).length / b.length);
+  const kl = (u, w) => {
+    let s = 0;
+    for(let i = 0; i < u.length; i++) if(u[i] > 0) s += u[i] * Math.log(u[i] / Math.max(w[i], 1e-12));
+    return s;
+  };
+  const m = p.map((v, i) => 0.5 * (v + q[i]));
+  return 0.5 * kl(p, m) + 0.5 * kl(q, m);
+}
+
+/* ---------------- full pipeline (one config in, everything out) ---------------- */
+const MIN_POOL = 3; // min_control_pool_size for the demo
+function runPipeline(cfg){
+  const targets = POP.filter(r => r.t === 1);
+  const controls = POP.filter(r => r.t === 0);
+
+  // Module 5 — edges from target only, then stratify everyone
+  const eInc = edgesOf(targets.map(r => r.income), cfg.nBins);
+  const eTen = edgesOf(targets.map(r => r.tenure), cfg.nBins);
+  for(const r of POP){
+    r.bi = bucketOf(r.income, eInc);
+    r.bt = bucketOf(r.tenure, eTen);
+    r.stratum = r.bi + '-' + r.bt + '-' + r.region[0];
+  }
+  const strata = {};
+  for(const r of POP){
+    (strata[r.stratum] = strata[r.stratum] || { key: r.stratum, bi: r.bi, bt: r.bt, region: r.region, targets: [], controls: [] })
+      [r.t ? 'targets' : 'controls'].push(r);
+  }
+  const noControl = new Set(), thin = new Set(), eligible = new Set();
+  for(const k in strata){
+    const s = strata[k];
+    if(!s.targets.length) continue;
+    if(s.controls.length === 0) noControl.add(k);
+    else { eligible.add(k); if(s.controls.length < MIN_POOL) thin.add(k); }
+  }
+
+  // Module 7 — global target moments, weighted z, Euclidean, exp(-d)
+  const mi = mean(targets.map(r => r.income)), si = pstd(targets.map(r => r.income)) || 1;
+  const mt = mean(targets.map(r => r.tenure)), st = pstd(targets.map(r => r.tenure)) || 1;
+  for(const r of POP){
+    r.zi = (r.income - mi) / si;
+    r.zt = (r.tenure - mt) / st;
+    r.ai = cfg.wInc * r.zi;  // a_k = w_k * z_k
+    r.at = cfg.wTen * r.zt;
+  }
+  let pairs = [];
+  for(const k of eligible){
+    const s = strata[k];
+    for(const t of s.targets) for(const c of s.controls){
+      const d = Math.sqrt((t.ai - c.ai) ** 2 + (t.at - c.at) ** 2);
+      pairs.push({ t, c, d, s: Math.exp(-d), stratum: k });
+    }
+  }
+  const totalPairs = pairs.length;
+
+  // max_candidates_per_target — keep K strongest controls per target
+  if(cfg.cap !== null){
+    const byT = new Map();
+    for(const p of pairs){
+      if(!byT.has(p.t.rm)) byT.set(p.t.rm, []);
+      byT.get(p.t.rm).push(p);
+    }
+    pairs = [];
+    for(const arr of byT.values()){
+      arr.sort((a, b) => b.s - a.s);
+      pairs.push(...arr.slice(0, Math.min(cfg.cap, arr.length)));
+    }
+  }
+
+  // Module 8 — global greedy, stable desc sort, no reuse, n = 1
+  const sorted = [...pairs].sort((a, b) => b.s - a.s);
+  const usedC = new Set(), usedT = new Set(), assignments = [];
+  const walk = []; // playback log: every pair in order with its outcome
+  for(const p of sorted){
+    let out = 'assigned', why = '';
+    if(usedT.has(p.t.rm)){ out = 'skipped'; why = p.t.id + ' already matched'; }
+    else if(usedC.has(p.c.rm)){ out = 'skipped'; why = p.c.id + ' already used'; }
+    if(out === 'assigned'){
+      usedT.add(p.t.rm); usedC.add(p.c.rm);
+      assignments.push({ t: p.t, c: p.c, s: p.s, d: p.d, rank: 1 });
+    }
+    walk.push({ t: p.t, c: p.c, s: p.s, d: p.d, out, why });
+  }
+
+  // Module 9 — tolerance: global quantile cutoff, primary preserved
+  const strengths = assignments.map(a => a.s).sort((a, b) => a - b);
+  const cutoff = strengths.length ? quantileCont(strengths, cfg.tolerance) : 0;
+  let kept = assignments.filter(a => a.s >= cutoff);
+  const keptT = new Set(kept.map(a => a.t.rm));
+  const bestByT = new Map();
+  for(const a of assignments){
+    const cur = bestByT.get(a.t.rm);
+    if(!cur || a.s > cur.s) bestByT.set(a.t.rm, a);
+  }
+  for(const [trm, a] of bestByT){
+    if(!keptT.has(trm)){ kept.push(a); keptT.add(trm); }
+  }
+  for(const a of kept) a.lowQuality = a.s < cutoff;
+
+  // target statuses
+  const statuses = {};
+  for(const t of targets){
+    if(noControl.has(t.stratum)) statuses[t.rm] = 'no_control_available';
+    else if(keptT.has(t.rm)) statuses[t.rm] = 'matched';
+    else statuses[t.rm] = 'unmatched';
+  }
+
+  // Module 11 — balance: full target vs matched control (pre-drift)
+  const matchedC = kept.map(a => a.c);
+  const tInc = targets.map(r => r.income), tTen = targets.map(r => r.tenure),
+        tVis = targets.map(r => r.visits), tReg = targets.map(r => r.region);
+  const cInc = matchedC.map(r => r.income), cTen = matchedC.map(r => r.tenure),
+        cVis = matchedC.map(r => r.visits), cReg = matchedC.map(r => r.region);
+  const balBefore = {
+    income: ksStat(tInc, cInc), tenure: ksStat(tTen, cTen),
+    region: jsDistance(tReg, cReg), visits: ksStat(tVis, cVis),
+  };
+
+  // naive reference: seeded random pick of controls, same size as matched set
+  const rng = mulberry32(7);
+  const pool = [...controls];
+  for(let i = pool.length - 1; i > 0; i--){ const j = Math.floor(rng() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  const naive = pool.slice(0, matchedC.length);
+  const balNaive = {
+    income: ksStat(tInc, naive.map(r => r.income)),
+    tenure: ksStat(tTen, naive.map(r => r.tenure)),
+    region: jsDistance(tReg, naive.map(r => r.region)),
+    visits: ksStat(tVis, naive.map(r => r.visits)),
+  };
+
+  // Module 12 — drift: monitor var (visits), target-quantile bins, weakest first
+  const drift = { flagged: balBefore.visits > 0.05, events: [], keptControls: new Set(matchedC.map(c => c.rm)), bins: [] };
+  const vEdges = [...new Set(edgesOf(tVis, cfg.nBins))];
+  const nBinsV = vEdges.length + 1;
+  const tShares = [], cShares = [];
+  for(let b = 0; b < nBinsV; b++){
+    tShares.push(tVis.filter(v => bucketOf(v, vEdges) === b).length / tVis.length);
+    cShares.push(cVis.length ? cVis.filter(v => bucketOf(v, vEdges) === b).length / cVis.length : 0);
+  }
+  if(drift.flagged && matchedC.length){
+    const strengthOf = new Map(kept.map(a => [a.c.rm, a.s]));
+    const nC = matchedC.length;
+    for(let b = 0; b < nBinsV; b++){
+      const excess = Math.floor(Math.max(0, (cShares[b] - tShares[b]) * nC));
+      if(excess <= 0) continue;
+      const members = matchedC.filter(c => drift.keptControls.has(c.rm) && bucketOf(c.visits, vEdges) === b)
+        .sort((x, y) => strengthOf.get(x.rm) - strengthOf.get(y.rm));
+      const drop = members.slice(0, excess);
+      drop.forEach(c => drift.keptControls.delete(c.rm));
+      if(drop.length){
+        drift.events.push({ bin: b, n: drop.length, ids: drop.map(c => c.id),
+          targetShare: tShares[b], controlShare: cShares[b] });
+        // engine re-filters the live control set per group; mirror that
+        const liveVis = matchedC.filter(c => drift.keptControls.has(c.rm)).map(r => r.visits);
+        for(let bb = 0; bb < nBinsV; bb++)
+          cShares[bb] = liveVis.length ? liveVis.filter(v => bucketOf(v, vEdges) === bb).length / liveVis.length : 0;
+      }
+    }
+  }
+  drift.tShares = tShares;
+  drift.cSharesBefore = matchedC.length
+    ? Array.from({ length: nBinsV }, (_, b) => cVis.filter(v => bucketOf(v, vEdges) === b).length / cVis.length)
+    : tShares.map(() => 0);
+  drift.edges = vEdges;
+
+  const finalC = matchedC.filter(c => drift.keptControls.has(c.rm));
+  const balAfter = {
+    visits: finalC.length ? ksStat(tVis, finalC.map(r => r.visits)) : 0,
+    income: finalC.length ? ksStat(tInc, finalC.map(r => r.income)) : 0,
+  };
+
+  return {
+    cfg, targets, controls, eInc, eTen, mi, si, mt, st,
+    strata, eligible, noControl, thin, pairs, totalPairs, walk, assignments,
+    cutoff, kept, statuses, matchedC, naive, balBefore, balNaive,
+    drift, finalC, balAfter,
+    nMatched: Object.values(statuses).filter(s => s === 'matched').length,
+  };
+}
+
+/* ---------------- shared state & helpers ---------------- */
+const DEFAULT_CFG = { wInc: 1, wTen: 1, nBins: 3, cap: null, tolerance: 0.8 };
+let cfg = { ...DEFAULT_CFG };
+let R = runPipeline(cfg);
+let focusRm = null; // focused target for scenes 3-4
+
+const fmt = (x, d = 2) => Number(x).toFixed(d);
+const $ = id => document.getElementById(id);
+
+// one live rAF per element — without this, dragging a slider fast leaves several
+// loops fighting over the same textContent and the digits jitter
+const numRafs = new WeakMap();
+function animateNumber(el, to, dur, fmtFn){
+  if(!el) return;
+  if(RM_REDUCED){ el.textContent = fmtFn(to); return; }
+  const prev = numRafs.get(el);
+  if(prev !== undefined) cancelAnimationFrame(prev);
+  const start = performance.now(), from = 0;
+  function tick(now){
+    const p = Math.min(1, (now - start) / dur);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.textContent = fmtFn(from + (to - from) * e);
+    if(p < 1){ numRafs.set(el, requestAnimationFrame(tick)); }
+    else numRafs.delete(el);
+  }
+  numRafs.set(el, requestAnimationFrame(tick));
+}
+function after(ms, fn, bag){
+  if(RM_REDUCED){ fn(); return 0; }
+  const id = setTimeout(fn, ms);
+  if(bag) bag.push(id);
+  return id;
+}
+function clearTimers(bag){ if(bag){ bag.forEach(clearTimeout); bag.length = 0; } }
+function clearTimersForAllScenes(){
+  for(const k in sceneState){
+    clearTimers(sceneState[k].timers);
+    if(sceneState[k].raf) cancelAnimationFrame(sceneState[k].raf);
+  }
+}
+
+// per-scene playback state
+const sceneState = {};
+function st(n){ return sceneState[n] = sceneState[n] || { played: false, timers: [] }; }
+
+function pickFocusTarget(){
+  // target with the most same-stratum candidates — richest scene 3 story
+  let best = null, bestN = -1;
+  for(const t of R.targets){
+    const n = (R.strata[t.stratum] || { controls: [] }).controls.length;
+    if(n > bestN){ bestN = n; best = t; }
+  }
+  return best;
+}
+
+/* ================================================================
+   SCENES — each scene: render() builds HTML, play() animates it.
+   ================================================================ */
+
+/* ---------------- Scene 0: scan & profile ---------------- */
+const SCAN_ORDER = (() => { // interleave T/C for display only
+  const rng = mulberry32(99);
+  const a = [...POP];
+  for(let i = a.length - 1; i > 0; i--){ const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
-}
+})();
 
-// Module 11: tenure was never part of stratification/matching -- check it anyway
-const MONITOR_EDGE = median(TARGET.map(t=>t[3]));
-const monitorBucket = v => v<=MONITOR_EDGE ? 0 : 1;
-let correctionApplied = false;
+const SCENES = {};
 
-let state = { stage:'group', selectedTarget:'T3', matchIndex:0, log:[], usedT:new Set(), usedC:new Set() };
-const STRATUM_LABEL = { '0-N':'North · income ≤ 79', '1-N':'North · income > 79', '0-S':'South · income ≤ 79', '1-S':'South · income > 79' };
-
-function chip(obj, opts={}){
-  const isTarget = TARGET.some(t=>t[0]===obj.id);
-  const cls = ['chip', isTarget ? 'target':'control'];
-  if(opts.selected) cls.push('selected');
-  const clickAttr = opts.clickable ? `data-select="${obj.id}"` : '';
-  return `<span class="${cls.join(' ')}" ${clickAttr}>${obj.id} <span class="r">${obj.region[0]}</span> $${obj.income}k</span>`;
-}
-
-function renderGroup(){
-  let html = `<div class="stage-head"><h2>Group similar customers</h2><span class="hint">Click a targeted customer to trace its group</span></div>`;
-  html += `<p class="edge-note">Comparisons only ever happen <b>within a group</b> — a rich Southerner is never compared to a poor Northerner, no matter how "close" the raw numbers might look.</p>`;
-  html += `<p class="edge-note">Income split point = <b>$${EDGE}k</b> — the median income of the 6 targeted customers. Applied to everyone.</p>`;
-  html += `<div class="strata-grid">`;
-  for(const key of ['1-N','0-N','1-S','0-S']){
-    const s = STRATA[key];
-    const hasSel = s.targets.includes(state.selectedTarget);
-    const warn = s.targets.length>0 && s.controls.length===0;
-    html += `<div class="stratum-card ${hasSel?'has-selected':''}">
-      <div class="title">${STRATUM_LABEL[key]}</div>
-      <div class="count ${warn?'warn':''}">${s.targets.length} targeted · ${s.controls.length} not targeted ${warn?'— no match possible':''}</div>
-      <div>${s.targets.map(id=>chip(tById[id],{clickable:true,selected:id===state.selectedTarget})).join('')}</div>
-      <div>${s.controls.map(id=>chip(cById[id])).join('')}</div>
-    </div>`;
-  }
-  html += `</div>`;
-  return html;
-}
-
-function renderScore(){
-  const t = tById[state.selectedTarget];
-  let html = `<div class="stage-head"><h2>Score every candidate</h2><span class="hint">Pick a targeted customer</span></div>`;
-  html += `<div class="target-strip">${TARGET.map(([id])=>chip(tById[id],{clickable:true,selected:id===state.selectedTarget})).join('')}</div>`;
-
-  const zt = z(t.income);
-  html += `<div class="formula-box">
-    <div class="line"><b>${t.id}</b> — income $${t.income}k, group <span class="mono">${STRATUM_LABEL[t.stratum]}</span></div>
-    <div class="line">Standardize: <span class="mono">z = (${t.income} − ${MEAN.toFixed(1)}) / ${STD.toFixed(2)} = ${zt.toFixed(3)}</span></div>
-  </div>`;
-
-  const candidates = STRATA[t.stratum].controls.map(cid=>{
-    const c = cById[cid];
-    const zc = z(c.income);
-    const d = Math.abs(zt-zc);
-    const s = Math.exp(-d);
-    return {c, zc, d, s};
-  }).sort((a,b)=>b.s-a.s);
-
-  if(candidates.length===0){
-    html += `<p class="empty-note">No non-targeted customers share this group — ${t.id} has nothing to be compared against, and will be marked "no control available."</p>`;
-  } else {
-    html += `<table class="dist"><thead><tr><th>Candidate</th><th>Income</th><th>z</th><th>Distance</th><th>Strength = e<sup>−d</sup></th></tr></thead><tbody>`;
-    candidates.forEach((row,i)=>{
-      html += `<tr class="${i===0?'best':''}"><td>${row.c.id}</td><td>$${row.c.income}k</td><td>${row.zc.toFixed(3)}</td><td>${row.d.toFixed(3)}</td><td>${row.s.toFixed(3)}${i===0?' — closest':''}</td></tr>`;
+SCENES[0] = {
+  render(){
+    $('sc0-inner').innerHTML = `
+      <div class="scene-tag fade-up">Modules 1–2 · ingest &amp; profile</div>
+      <h2 class="fade-up d1">First, look at the data</h2>
+      <p class="lead fade-up d2">RiMatch streams the file into DuckDB and profiles it in <b>one batched pass</b> — row counts, null rates, column types, and the target/control split. Nothing is matched yet; we just need to know what we're holding.</p>
+      <div class="scan-stage glass fade-up d3">
+        <div class="scan-grid" id="scanGrid">${SCAN_ORDER.map(r =>
+          `<div class="scan-cell" data-t="${r.t}"></div>`).join('')}</div>
+        <div class="scanline" id="scanline"></div>
+      </div>
+      <div class="scan-stats">
+        <div class="stat glass fade-up d3"><div class="v" id="stRows">0</div><div class="k">rows scanned</div></div>
+        <div class="stat glass fade-up d3"><div class="v red" id="stT">0</div><div class="k">targeted (treatment = 1)</div></div>
+        <div class="stat glass fade-up d4"><div class="v" id="stC">0</div><div class="k">not targeted (control pool)</div></div>
+        <div class="stat glass fade-up d4"><div class="v" id="stNull">0</div><div class="k">nulls · 4 columns, 1 binary flag</div></div>
+      </div>
+      <p class="capacity-note fade-up d4">Control pool <b>50 ≥ 30 targets</b> — full unique 1:1 coverage is possible without reusing anyone. (If the pool were smaller, RiMatch would warn here and report the shortfall instead of silently reusing controls.)</p>`;
+  },
+  play(){
+    const S = st(0); clearTimers(S.timers);
+    const cells = [...document.querySelectorAll('#scanGrid .scan-cell')];
+    cells.forEach(c => c.classList.remove('scanned', 't', 'c'));
+    const line = $('scanline');
+    line.classList.remove('run');
+    void line.offsetWidth;
+    line.classList.add('run');
+    const cols = 20, rows = Math.ceil(cells.length / cols);
+    cells.forEach((c, i) => {
+      const row = Math.floor(i / cols);
+      after(150 + row * (2100 / rows) + (i % cols) * 14, () => {
+        c.classList.add('scanned', c.dataset.t === '1' ? 't' : 'c');
+      }, S.timers);
     });
-    html += `</tbody></table>`;
+    after(RM_REDUCED ? 0 : 2300, () => {
+      animateNumber($('stRows'), 80, 700, v => Math.round(v));
+      animateNumber($('stT'), 30, 700, v => Math.round(v));
+      animateNumber($('stC'), 50, 700, v => Math.round(v));
+      $('stNull').textContent = '0';
+    }, S.timers);
   }
-  return html;
-}
-
-function laneY(region){ return region==='North' ? 48 : 100; }
-function xFor(income){ return 30 + (income-30)/(100-30)*340; }
-
-function renderNumline(assignedPairs, highlightIds=[]){
-  let svg = `<svg class="numline" viewBox="0 0 400 140">`;
-  svg += `<text class="lane-label" x="6" y="44">North</text><text class="lane-label" x="6" y="104">South</text>`;
-  const edgeX = xFor(EDGE);
-  svg += `<line x1="${edgeX}" y1="20" x2="${edgeX}" y2="120" stroke="var(--border)" stroke-dasharray="3,3"/>`;
-  assignedPairs.forEach(a=>{
-    const t=tById[a.tid], c=cById[a.cid];
-    svg += `<line x1="${xFor(t.income)}" y1="${laneY(t.region)}" x2="${xFor(c.income)}" y2="${laneY(c.region)}" stroke="var(--teal)" stroke-width="2"/>`;
-  });
-  TARGET.forEach(([id,region,income])=>{
-    const used = assignedPairs.some(a=>a.tid===id);
-    const hl = highlightIds.includes(id);
-    svg += `<circle cx="${xFor(income)}" cy="${laneY(region)}" r="7" fill="${used?'var(--teal-strong)':'var(--teal)'}" stroke="${hl?'var(--brass)':'none'}" stroke-width="3"/>`;
-    svg += `<text x="${xFor(income)}" y="${laneY(region)-12}" text-anchor="middle">${id}</text>`;
-  });
-  CONTROL.forEach(([id,region,income])=>{
-    const used = assignedPairs.some(a=>a.cid===id);
-    const hl = highlightIds.includes(id);
-    svg += `<circle cx="${xFor(income)}" cy="${laneY(region)}" r="6" fill="${used?'var(--surface-2)':'var(--surface)'}" stroke="${hl?'var(--brass)':'var(--ink-muted)'}" stroke-width="${hl?3:1.5}" opacity="${used?0.5:1}"/>`;
-    svg += `<text x="${xFor(income)}" y="${laneY(region)+16}" text-anchor="middle">${id}</text>`;
-  });
-  svg += `</svg>`;
-  return svg;
-}
-
-function renderMatch(){
-  let html = `<div class="stage-head"><h2>Match, strongest first</h2><span class="hint">Global list, sorted by strength — no one gets reused</span></div>`;
-  html += `<p class="edge-note">Sorted globally by strength, not grouped by target or stratum — the single best match anywhere gets locked in first, so a strong pair never waits behind a weaker one just because of grouping. You'll see the same target or control listed more than once below: that's every valid candidate pair being considered, not a duplicate — only one will end up <b>Assigned</b>.</p>`;
-  html += `<div class="controls-row">
-    <button class="btn primary" id="stepBtn" ${state.matchIndex>=CANDIDATES.length?'disabled':''}>Next match →</button>
-    <button class="btn" id="resetBtn">Reset</button>
-    <span class="hint">${state.matchIndex} / ${CANDIDATES.length} pairs reviewed</span>
-  </div>`;
-
-  const last = state.log[state.log.length-1];
-  let capClass = '', capText = 'Click "Next match" to start.';
-  if(last){
-    capClass = last.outcome==='assigned' ? 'assigned' : 'skipped';
-    capText = last.outcome==='assigned'
-      ? `<b>${last.tid} ↔ ${last.cid}</b> — distance ${last.d.toFixed(2)}, strength ${last.s.toFixed(2)}. Both free → <b>assigned</b>.`
-      : `<b>${last.tid} – ${last.cid}</b> — strength ${last.s.toFixed(2)}, but ${last.reason} → <b>skipped</b>.`;
-  }
-  html += `<div class="step-caption ${capClass}">${capText}</div>`;
-
-  const assignedSoFar = state.log.filter(l=>l.outcome==='assigned');
-  html += renderNumline(assignedSoFar, last?[last.tid,last.cid]:[]);
-
-  html += `<div class="match-wrap"><table class="match"><thead><tr><th>#</th><th>Target</th><th>Control</th><th>Dist</th><th>Strength</th><th class="status">Status</th></tr></thead><tbody>`;
-  CANDIDATES.forEach((c,i)=>{
-    const done = i < state.matchIndex;
-    const entry = done ? state.log[i] : null;
-    const rowClass = !done ? 'pending' : (entry.outcome==='assigned'?'assigned':'skipped');
-    const statusText = !done ? '—' : (entry.outcome==='assigned' ? 'Assigned' : `Skipped (${entry.reason})`);
-    html += `<tr class="${rowClass}"><td>${i+1}</td><td>${c.tid}</td><td>${c.cid}</td><td>${c.d.toFixed(2)}</td><td>${c.s.toFixed(2)}</td><td class="status">${statusText}</td></tr>`;
-  });
-  html += `</tbody></table></div>`;
-  return html;
-}
-
-function renderVerify(){
-  const matchedIncomes = FULL.assigned.map(a=>cById[a.cid].income);
-  const matchedMean = matchedIncomes.reduce((a,b)=>a+b,0)/matchedIncomes.length;
-  const naiveIncomes = CONTROL.slice(0,5).map(c=>c[2]);
-  const naiveMean = naiveIncomes.reduce((a,b)=>a+b,0)/naiveIncomes.length;
-  const noMatch = TARGET.map(t=>t[0]).filter(id=>!FULL.usedT.has(id));
-
-  const ksMatched = ksStat(targetIncomes, matchedIncomes);
-  const ksNaive = ksStat(targetIncomes, naiveIncomes);
-  const maxKs = Math.max(ksMatched, ksNaive, 0.01);
-
-  let html = `<div class="stage-head"><h2>Check the result</h2><span class="hint">Matched group vs. a naive random pick of 5</span></div>`;
-  html += `<div class="verify-stats">
-    <div class="vstat"><div class="n">$${MEAN.toFixed(1)}k</div><div class="d">Targeted customers' average income</div></div>
-    <div class="vstat matched"><div class="n">$${matchedMean.toFixed(1)}k</div><div class="d">Matched control's average income</div></div>
-    <div class="vstat naive"><div class="n">$${naiveMean.toFixed(1)}k</div><div class="d">Naive random control's average income</div></div>
-  </div>`;
-
-  html += `<div class="ks-row">
-    <div class="ks-bar"><span class="who">Matched</span><div class="ks-track"><div class="ks-fill matched" style="width:${(ksMatched/maxKs*100).toFixed(0)}%"></div></div><span class="val">${ksMatched.toFixed(2)}</span></div>
-    <div class="ks-bar"><span class="who">Naive</span><div class="ks-track"><div class="ks-fill naive" style="width:${(ksNaive/maxKs*100).toFixed(0)}%"></div></div><span class="val">${ksNaive.toFixed(2)}</span></div>
-    <p class="hint">KS statistic — how different the income distributions are. Lower is better.</p>
-  </div>`;
-
-  html += renderNumline(FULL.assigned);
-  html += `<p class="coverage-note"><b>${FULL.assigned.length}/6</b> targeted customers matched. <b>${noMatch.join(', ')}</b> had no candidates in its group and is flagged "no control available" — visible, not hidden.</p>`;
-  return html;
-}
-
-function renderCorrect(){
-  const matchedIds = FULL.assigned.map(a=>a.cid);
-  const targetTenures = TARGET.map(t=>t[3]);
-  const tBuckets = targetTenures.map(monitorBucket);
-  const tCount0 = tBuckets.filter(b=>b===0).length, tCount1 = tBuckets.length - tCount0;
-
-  const matchedTenures = matchedIds.map(id=>cById[id].tenure);
-  const mBucketOf = Object.fromEntries(matchedIds.map(id=>[id, monitorBucket(cById[id].tenure)]));
-  const bucket0Members = matchedIds.filter(id=>mBucketOf[id]===0);
-  const bucket1Members = matchedIds.filter(id=>mBucketOf[id]===1);
-
-  const sampleTotal = matchedIds.length;
-  const target0 = roundHalfEven((tCount0/TARGET.length)*sampleTotal);
-  const target1 = roundHalfEven((tCount1/TARGET.length)*sampleTotal);
-  const excess0 = bucket0Members.length - target0;
-  const excess1 = bucket1Members.length - target1;
-
-  const ksBefore = ksStat(targetTenures, matchedTenures);
-
-  let toRemove = [];
-  if(excess0>0) toRemove = seededShuffle(bucket0Members, 42).slice(0, excess0);
-  if(excess1>0) toRemove = toRemove.concat(seededShuffle(bucket1Members, 43).slice(0, excess1));
-
-  const finalIds = correctionApplied ? matchedIds.filter(id=>!toRemove.includes(id)) : matchedIds;
-  const finalTenures = finalIds.map(id=>cById[id].tenure);
-  const ksAfter = correctionApplied ? ksStat(targetTenures, finalTenures) : null;
-
-  let html = `<div class="stage-head"><h2>Check for hidden drift</h2><span class="hint">Tenure was never part of matching</span></div>`;
-  html += `<p class="edge-note"><b>Tenure</b> (years at company) wasn't used to group or score anyone. It's checked anyway — a variable can drift even when the ones you matched on look perfect.</p>`;
-
-  html += `<table class="dist"><thead><tr><th></th><th>≤ ${MONITOR_EDGE}yrs</th><th>&gt; ${MONITOR_EDGE}yrs</th><th>KS statistic</th></tr></thead><tbody>
-    <tr><td>Targeted (6)</td><td>${tCount0}</td><td>${tCount1}</td><td>—</td></tr>
-    <tr class="${ksBefore>0.05?'best':''}"><td>Matched control (${sampleTotal})</td><td>${bucket0Members.length}</td><td>${bucket1Members.length}</td><td>${ksBefore.toFixed(2)}${ksBefore>0.05?' — flagged':''}</td></tr>
-  </tbody></table>`;
-
-  html += `<div class="controls-row" style="margin-top:16px;">
-    <button class="btn primary" id="fixBtn" ${correctionApplied?'disabled':''}>Remove over-represented rows</button>
-    ${correctionApplied?'<button class="btn" id="undoFixBtn">Reset</button>':''}
-  </div>`;
-
-  if(!correctionApplied){
-    html += `<div class="step-caption">Group ≤${MONITOR_EDGE}yrs has ${bucket0Members.length} rows but should have ~${target0} to match target's split → <b>${excess0} excess</b>. Group &gt;${MONITOR_EDGE}yrs has ${bucket1Members.length} but should have ~${target1} → already short, nothing to remove there.</div>`;
-  } else {
-    html += `<div class="step-caption assigned">Removed <b>${toRemove.join(', ')}</b> — randomly selected from the over-represented ≤${MONITOR_EDGE}yrs group. KS improved from <b>${ksBefore.toFixed(2)}</b> to <b>${ksAfter.toFixed(2)}</b>.</div>`;
-    html += `<p class="coverage-note">Not fully fixed — the &gt;${MONITOR_EDGE}yrs group was already short and this design never backfills with a fresh draw, only trims excess. Control group is now <b>${finalIds.length}</b> rows, down from ${sampleTotal}.</p>`;
-  }
-
-  return html;
-}
-
-
-function render(){
-  document.querySelectorAll('#stepper button').forEach(b=>b.classList.toggle('active', b.dataset.stage===state.stage));
-  const map = { group:renderGroup, score:renderScore, match:renderMatch, verify:renderVerify, correct:renderCorrect };
-  document.getElementById('stageContent').innerHTML = map[state.stage]();
-  document.querySelectorAll('[data-select]').forEach(el=>{
-    el.addEventListener('click', ()=>{ state.selectedTarget = el.dataset.select; render(); });
-  });
-  if(state.stage==='match'){
-    const stepBtn = document.getElementById('stepBtn');
-    const resetBtn = document.getElementById('resetBtn');
-    stepBtn && stepBtn.addEventListener('click', doStep);
-    resetBtn && resetBtn.addEventListener('click', ()=>{ state.matchIndex=0; state.log=[]; state.usedT=new Set(); state.usedC=new Set(); render(); });
-  }
-  if(state.stage==='correct'){
-    const fixBtn = document.getElementById('fixBtn');
-    const undoBtn = document.getElementById('undoFixBtn');
-    fixBtn && fixBtn.addEventListener('click', ()=>{ correctionApplied=true; render(); });
-    undoBtn && undoBtn.addEventListener('click', ()=>{ correctionApplied=false; render(); });
-  }
-}
-
-function doStep(){
-  if(state.matchIndex>=CANDIDATES.length) return;
-  const c = CANDIDATES[state.matchIndex];
-  let outcome='assigned', reason='';
-  if(state.usedT.has(c.tid)){ outcome='skipped'; reason=`${c.tid} already matched`; }
-  else if(state.usedC.has(c.cid)){ outcome='skipped'; reason=`${c.cid} already used`; }
-  if(outcome==='assigned'){ state.usedT.add(c.tid); state.usedC.add(c.cid); }
-  state.log.push({...c, outcome, reason});
-  state.matchIndex++;
-  render();
-}
-
-document.getElementById('stepper').addEventListener('click', e=>{
-  const btn = e.target.closest('button[data-stage]');
-  if(!btn) return;
-  state.stage = btn.dataset.stage;
-  render();
-});
-
-const whyData = {
-  raw: { rows:[
-    ['Target','—','$80,000','2.0 yrs',''],
-    ['Candidate A','vs target','$82,000 (+2,000)','8.0 yrs (+6.0)','distance ~ 2000.01'],
-    ['Candidate B','vs target','$60,000 (+20,000)','2.5 yrs (+0.5)','distance ~ 20000.00'],
-  ], winner:1, note:"Raw distance picks Candidate A -- income's dollar scale completely swamps tenure, even though B is nearly identical on tenure." },
-  std: { rows:[
-    ['Target','—','z = 0.00','z = 0.00',''],
-    ['Candidate A','vs target','dz ~ 0.13','dz ~ 2.00','distance ~ 2.00'],
-    ['Candidate B','vs target','dz ~ 1.33','dz ~ 0.17','distance ~ 1.34'],
-  ], winner:2, note:"Once both attributes are standardized, Candidate B wins instead -- the decision flips once income can't dominate by raw scale alone." }
 };
-function renderWhy(mode){
-  const d = whyData[mode];
-  let html = `<thead><tr><th></th><th></th><th>Income</th><th>Tenure</th><th>Distance</th></tr></thead><tbody>`;
-  d.rows.forEach((r,i)=>{ html += `<tr class="${i===d.winner?'winner':''}"><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`; });
-  html += `</tbody>`;
-  document.getElementById('whyTable').innerHTML = html;
-  document.getElementById('whyNote').textContent = d.note;
-}
-document.getElementById('btnRaw').addEventListener('click', ()=>{ document.getElementById('btnRaw').classList.add('active'); document.getElementById('btnStd').classList.remove('active'); renderWhy('raw'); });
-document.getElementById('btnStd').addEventListener('click', ()=>{ document.getElementById('btnStd').classList.add('active'); document.getElementById('btnRaw').classList.remove('active'); renderWhy('std'); });
-renderWhy('raw');
 
-render();
+/* ---------------- Scene 1: bin & stratify ---------------- */
+function numlineSVG(id, values, edges, unit, color){
+  const W = 600, H = 86, pad = 26;
+  const lo = Math.min(...values) - 3, hi = Math.max(...values) + 3;
+  const x = v => pad + (v - lo) / (hi - lo) * (W - 2 * pad);
+  let dots = '';
+  POP.forEach((r, i) => {
+    const v = r[color];
+    const lane = r.t ? 26 : 54;
+    const jit = ((i * 37) % 13) - 6;
+    dots += `<circle class="nl-dot" cx="${x(v).toFixed(1)}" cy="${lane + jit * 0.9}" r="3.6"
+      fill="${r.t ? 'var(--red)' : 'rgba(255,255,255,0.30)'}"/>`;
+  });
+  let els = '';
+  edges.forEach((e, i) => {
+    els += `<line class="nl-edge" x1="${x(e).toFixed(1)}" y1="10" x2="${x(e).toFixed(1)}" y2="72"
+      style="transition-delay:${0.25 + i * 0.18}s"/>
+      <text class="nl-edge-label" x="${x(e).toFixed(1)}" y="82" text-anchor="middle"
+      style="transition-delay:${0.5 + i * 0.18}s">${e.toFixed(unit === '$k' ? 0 : 1)}</text>`;
+  });
+  return `<svg class="nl" id="${id}" viewBox="0 0 ${W} ${H}">${dots}${els}</svg>`;
+}
+
+SCENES[1] = {
+  render(){
+    const cards = Object.values(R.strata)
+      .filter(s => s.targets.length)
+      .sort((a, b) => a.key < b.key ? -1 : 1);
+    let ci = 0;
+    const cardsHtml = cards.map(s => {
+      const noCtl = s.controls.length === 0;
+      const thin = !noCtl && s.controls.length < MIN_POOL;
+      const dots = s.targets.map(() => '<span class="sdot t"></span>').join('') +
+                   s.controls.map(() => '<span class="sdot c"></span>').join('');
+      return `<div class="stratum-card ${noCtl ? 'no-ctl' : ''} ${thin ? 'thin' : ''}" style="transition-delay:${Math.min(ci++ * 0.05, 0.9)}s">
+        <div class="sk">bin ${s.bi} · bin ${s.bt} · ${s.region}</div>
+        <div class="cnt"><span class="rt">${s.targets.length} target${s.targets.length > 1 ? 's' : ''}</span> · ${s.controls.length} control${s.controls.length !== 1 ? 's' : ''}</div>
+        <div class="sdots">${dots}</div>
+        ${noCtl ? '<div class="stamp">no control available</div>' : thin ? `<div class="stamp">thin stratum (&lt; ${MIN_POOL}) — still matched</div>` : ''}
+      </div>`;
+    }).join('');
+    $('sc1-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 5 · binning &amp; stratification</div>
+      <h2 class="fade-up d1">Bin on the target, group everyone</h2>
+      <p class="lead fade-up d2">Numeric variables are cut into <b>${R.cfg.nBins} quantile bins</b> — and the edges are computed <b>from the target group only</b>, so the grid is defined by who was treated, never by the control pool. Those same edges are then applied to everyone. Rows that land in the same bins <b>and</b> share a region form a <b>stratum</b>; comparisons only ever happen inside one.</p>
+      <div class="numline-box glass fade-up d3">
+        <div class="nl-title"><span>income — ${R.eInc.length} target-derived edges</span><span class="mono">quantile_cont(income) WHERE treatment = 1</span></div>
+        ${numlineSVG('nlInc', POP.map(r => r.income), R.eInc, '$k', 'income')}
+      </div>
+      <div class="numline-box glass fade-up d3">
+        <div class="nl-title"><span>tenure — ${R.eTen.length} target-derived edges</span><span class="mono">quantile_cont(tenure) WHERE treatment = 1</span></div>
+        ${numlineSVG('nlTen', POP.map(r => r.tenure), R.eTen, 'y', 'tenure')}
+      </div>
+      <div class="strata-block fade-up d4">
+        <h3>${Object.keys(R.strata).length} strata formed · ${R.eligible.size} eligible · ${R.noControl.size} without controls · ${R.thin.size} thin</h3>
+        <div class="strata-grid">${cardsHtml}</div>
+      </div>`;
+  },
+  play(){ /* edges + cards animate via .scene.in CSS */ }
+};
+
+/* ---------------- Scene 2: z-score ---------------- */
+SCENES[2] = {
+  render(){
+    const picks = [R.targets[0], R.targets[7], R.targets[14], R.targets[21]].filter(Boolean);
+    const cards = picks.map((t, i) => `
+      <div class="zcard" style="transition-delay:${0.15 + i * 0.14}s">
+        <div class="who">${t.id} <span style="color:var(--ink-faint);font-weight:400;">· income $${t.income}k</span></div>
+        <div><span class="mono">(${t.income} − ${fmt(R.mi, 1)}) / ${fmt(R.si, 2)}</span><span class="arrow">→</span><span class="mono">z = ${fmt(t.zi, 2)}</span></div>
+      </div>`).join('');
+    $('sc2-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 7a · standardization</div>
+      <h2 class="fade-up d1">Put dollars and years on the same ruler</h2>
+      <p class="lead fade-up d2">Income spans ~$90k; tenure spans ~10 years. Raw, a $1,000 gap would silently crush a 1-year gap. So every numeric variable is z-scored — <span class="mono">z = (x − mean) / std</span> — using the mean and std of the <b>whole target group, computed once, globally</b>. Same moments for targets and controls alike: that's what makes a strength of 0.91 in one stratum comparable to 0.91 in another.</p>
+      <div class="formula-box fade-up d3">
+        <div class="line">income — target mean <span class="mono">${fmt(R.mi, 2)}</span> · target std <span class="mono">${fmt(R.si, 2)}</span> (population std, ddof=0)</div>
+        <div class="line">tenure — target mean <span class="mono">${fmt(R.mt, 2)}</span> · target std <span class="mono">${fmt(R.st, 2)}</span></div>
+      </div>
+      <div class="zmorph">${cards}</div>
+      <details class="why fade-up d4">
+        <summary>Why not just use raw distance?</summary>
+        <div class="why-body">
+          <div class="why-toggle">
+            <button id="btnRaw" class="active">Raw distance</button>
+            <button id="btnStd">Standardized distance</button>
+          </div>
+          <table class="why-tbl" id="whyTable"></table>
+          <p class="why-note" id="whyNote"></p>
+        </div>
+      </details>`;
+    const whyData = {
+      raw: { rows: [
+        ['Target', '—', '$80,000', '2.0 yrs', ''],
+        ['Candidate A', 'vs target', '$82,000 (+2,000)', '8.0 yrs (+6.0)', 'distance ~ 2000.01'],
+        ['Candidate B', 'vs target', '$60,000 (+20,000)', '2.5 yrs (+0.5)', 'distance ~ 20000.00'],
+      ], winner: 1, note: 'Raw distance picks Candidate A — income\'s dollar scale completely swamps tenure, even though B is nearly identical on tenure.' },
+      std: { rows: [
+        ['Target', '—', 'z = 0.00', 'z = 0.00', ''],
+        ['Candidate A', 'vs target', 'dz ~ 0.13', 'dz ~ 2.00', 'distance ~ 2.00'],
+        ['Candidate B', 'vs target', 'dz ~ 1.33', 'dz ~ 0.17', 'distance ~ 1.34'],
+      ], winner: 2, note: 'Once both attributes are standardized, Candidate B wins instead — the decision flips once income can\'t dominate by raw scale alone.' }
+    };
+    const renderWhy = mode => {
+      const d = whyData[mode];
+      let html = '<thead><tr><th></th><th></th><th>Income</th><th>Tenure</th><th>Distance</th></tr></thead><tbody>';
+      d.rows.forEach((r, i) => { html += `<tr class="${i === d.winner ? 'winner' : ''}"><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`; });
+      $('whyTable').innerHTML = html + '</tbody>';
+      $('whyNote').textContent = d.note;
+    };
+    $('btnRaw').addEventListener('click', () => { $('btnRaw').classList.add('active'); $('btnStd').classList.remove('active'); renderWhy('raw'); });
+    $('btnStd').addEventListener('click', () => { $('btnStd').classList.add('active'); $('btnRaw').classList.remove('active'); renderWhy('std'); });
+    renderWhy('raw');
+  },
+  play(){}
+};
+
+/* ---------------- Scene 3: distance & strength ---------------- */
+function focusTarget(){ return POP.find(r => r.rm === focusRm) || pickFocusTarget(); }
+function candidatesFor(t){
+  const s = R.strata[t.stratum];
+  if(!s) return [];
+  return s.controls.map(c => {
+    const d = Math.sqrt((t.ai - c.ai) ** 2 + (t.at - c.at) ** 2);
+    return { c, d, s: Math.exp(-d) };
+  }).sort((a, b) => b.s - a.s);
+}
+
+SCENES[3] = {
+  render(){
+    const t = focusTarget();
+    const cands = candidatesFor(t);
+    // weighted-z scatter (a_income × a_tenure): straight-line distance here IS the score
+    const W = 520, H = 380, pad = 38;
+    const xs = POP.map(r => r.ai), ys = POP.map(r => r.at);
+    const x0 = Math.min(...xs) - 0.3, x1 = Math.max(...xs) + 0.3;
+    const y0 = Math.min(...ys) - 0.3, y1 = Math.max(...ys) + 0.3;
+    const X = v => pad + (v - x0) / (x1 - x0) * (W - 2 * pad);
+    const Y = v => H - pad - (v - y0) / (y1 - y0) * (H - 2 * pad);
+    const candSet = new Set(cands.map(k => k.c.rm));
+    let pts = '', lines = '';
+    for(const r of POP){
+      if(r.t === 0){
+        pts += `<circle class="pt c ${candSet.has(r.rm) ? 'cand' : 'dim'}" data-c="${r.rm}" cx="${X(r.ai).toFixed(1)}" cy="${Y(r.at).toFixed(1)}" r="${candSet.has(r.rm) ? 5.5 : 4}"><title>${r.id} · ${r.region} · $${r.income}k · ${r.tenure}y</title></circle>`;
+      }
+    }
+    for(const r of POP){
+      if(r.t === 1){
+        pts += `<circle class="pt t ${r.rm === t.rm ? 'focus' : ''}" data-tfocus="${r.rm}" cx="${X(r.ai).toFixed(1)}" cy="${Y(r.at).toFixed(1)}" r="${r.rm === t.rm ? 7.5 : 5}"><title>${r.id} · ${r.region} · $${r.income}k · ${r.tenure}y</title></circle>`;
+      }
+    }
+    cands.forEach((k, i) => {
+      lines += `<line class="dline" id="dl${i}" x1="${X(t.ai).toFixed(1)}" y1="${Y(t.at).toFixed(1)}" x2="${X(k.c.ai).toFixed(1)}" y2="${Y(k.c.at).toFixed(1)}" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>`;
+    });
+    const list = cands.slice(0, 8).map((k, i) => `
+      <div class="cand-row ${i === 0 ? 'best' : ''}" data-i="${i}">
+        <span class="cid">${k.c.id}</span>
+        <div class="bar-track"><div class="bar-fill" data-w="${(k.s * 100).toFixed(0)}"></div></div>
+        <span class="sv">d ${fmt(k.d)} · s ${fmt(k.s)}</span>
+      </div>`).join('');
+    $('sc3-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 7b · scoring</div>
+      <h2 class="fade-up d1">Every eligible pair gets a distance</h2>
+      <p class="lead fade-up d2">Within <b>${t.id}</b>'s stratum, every control candidate is scored. Each axis below is a z-score <b>stretched by its weight</b> (<span class="mono">a = w · z</span>), so ordinary straight-line distance here <i>is</i> the weighted Euclidean distance. Then <span class="mono">strength = e<sup>−d</sup></span> relabels that gap on a 0–1 ruler: identical rows score 1, farther slides toward 0. Ranking never changes — only the scale becomes comparable across strata. <b>Click any red dot</b> to re-run this for another target.</p>
+      <div class="scatter-layout">
+        <div class="scatter-box glass fade-up d3">
+          <svg class="scatter" viewBox="0 0 ${W} ${H}">
+            <line class="axis" x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}"/>
+            <line class="axis" x1="${pad}" y1="${pad}" x2="${pad}" y2="${H - pad}"/>
+            <text x="${W / 2}" y="${H - 8}" text-anchor="middle">weighted z · income (w=${fmt(R.cfg.wInc, 1)})</text>
+            <text x="12" y="${H / 2}" text-anchor="middle" transform="rotate(-90 12 ${H / 2})">weighted z · tenure (w=${fmt(R.cfg.wTen, 1)})</text>
+            ${lines}${pts}
+          </svg>
+        </div>
+        <div class="fade-up d4">
+          <div class="formula-box" style="margin-top:0;">
+            <div class="line"><b>${t.id}</b> · ${t.region} · $${t.income}k · ${t.tenure}y — <span class="mono">${cands.length} candidate${cands.length !== 1 ? 's' : ''} in stratum</span></div>
+            <div class="line mono" style="font-size:12.5px;">d = √( (wᵢ·Δzᵢ)² + (wₜ·Δzₜ)² ) → s = e^(−d)</div>
+          </div>
+          <div class="cand-list" id="candList">${list || '<p class="hint">No candidates in this stratum.</p>'}</div>
+        </div>
+      </div>`;
+    document.querySelectorAll('[data-tfocus]').forEach(el => {
+      el.addEventListener('click', () => {
+        focusRm = +el.dataset.tfocus;
+        SCENES[3].render(); SCENES[3].play();
+        SCENES[4].render(); SCENES[4].play();
+      });
+    });
+  },
+  play(){
+    const S = st(3); clearTimers(S.timers);
+    const cands = candidatesFor(focusTarget());
+    cands.slice(0, 8).forEach((k, i) => {
+      after(200 + i * 160, () => {
+        const line = $('dl' + i);
+        if(line){ line.style.transition = 'stroke-dashoffset 0.5s ease'; line.style.strokeDashoffset = '0'; }
+        const pt = document.querySelector(`.pt[data-c="${k.c.rm}"]`);
+        if(pt){
+          pt.classList.add('pop');
+          after(420, () => pt.classList.remove('pop'), S.timers);
+        }
+        const row = document.querySelector(`.cand-row[data-i="${i}"]`);
+        if(row){
+          row.classList.add('show');
+          const fill = row.querySelector('.bar-fill');
+          if(fill) fill.style.width = fill.dataset.w + '%';
+        }
+      }, S.timers);
+    });
+  }
+};
+
+/* ---------------- Scene 4: candidate cap ---------------- */
+SCENES[4] = {
+  render(){
+    const t = focusTarget();
+    const cands = candidatesFor(t);
+    const K = R.cfg.cap;
+    const list = cands.map((k, i) => `
+      <div class="cand-row ${K !== null && i >= K ? 'cut-pending' : 'show'}" data-i="${i}">
+        <span class="cid">${k.c.id}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${(k.s * 100).toFixed(0)}%"></div></div>
+        <span class="sv">s ${fmt(k.s)}</span>
+      </div>`).join('');
+    $('sc4-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 7c · candidate cap <span class="mono" style="text-transform:none;">max_candidates_per_target</span></div>
+      <h2 class="fade-up d1">Keep only the K closest per target</h2>
+      <p class="lead fade-up d2">${K === null
+        ? `The engine default is <b>no cap</b> — every pair is kept, exactly. On multi-million-row data you can set a cap (try the slider, top right) and each target keeps only its K strongest controls. A target's nearest control is never dropped, so match quality is preserved; only <b>retained memory</b> shrinks. The distance math itself is unchanged.`
+        : `Cap is <b>K = ${K}</b>: each target keeps only its ${K} strongest control${K > 1 ? 's' : ''}. Watch ${t.id}'s weaker candidates fade below — they are never stored, never enter the global pool. ${t.id}'s nearest control is always safe.`}</p>
+      <div class="scatter-layout">
+        <div class="cand-list fade-up d3" id="capList" style="max-height:430px;overflow-y:auto;">${list}</div>
+        <div class="fade-up d4">
+          <div class="verify-stats" style="grid-template-columns:1fr 1fr;display:grid;gap:14px;">
+            <div class="stat glass"><div class="v" id="capTotal">0</div><div class="k">pairs scored (all strata)</div></div>
+            <div class="stat glass"><div class="v red" id="capKept">0</div><div class="k">pairs retained after cap</div></div>
+          </div>
+          <p class="hint" style="margin-top:12px;">Strata smaller than K are untouched, so everyday datasets behave byte-identically to the uncapped run.</p>
+        </div>
+      </div>`;
+  },
+  play(){
+    const S = st(4); clearTimers(S.timers);
+    animateNumber($('capTotal'), R.totalPairs, 800, v => Math.round(v));
+    animateNumber($('capKept'), R.pairs.length, 800, v => Math.round(v));
+    document.querySelectorAll('#capList .cut-pending').forEach((row, i) => {
+      after(300 + i * 130, () => { row.classList.remove('cut-pending'); row.classList.add('show', 'cut'); }, S.timers);
+    });
+  }
+};
+
+/* ---------------- Scene 5: global greedy matching ---------------- */
+SCENES[5] = {
+  render(){
+    const SHOW = Math.min(60, R.walk.length);
+    const rows = R.walk.slice(0, SHOW).map((w, i) => `
+      <div class="pair-row" data-i="${i}"><span class="rk">${i + 1}</span><span class="who">${w.t.id}–${w.c.id}</span><span class="ss">${fmt(w.s)}</span><span class="st"></span></div>`).join('');
+    // bipartite layout: targets left (rm 1..30), controls right (rm 31..80)
+    const W = 460, nT = R.targets.length, nC = R.controls.length;
+    const H = Math.max(nT, nC) * 13 + 44;
+    const yT = new Map(), yC = new Map();
+    R.targets.forEach((t, i) => yT.set(t.rm, 26 + i * (H - 52) / Math.max(1, nT - 1)));
+    R.controls.forEach((c, i) => yC.set(c.rm, 26 + i * (H - 52) / Math.max(1, nC - 1)));
+    this._lay = { W, H, yT, yC };
+    let dots = '', lines = '';
+    for(const a of R.assignments){
+      const y1 = yT.get(a.t.rm), y2 = yC.get(a.c.rm);
+      lines += `<path class="bm-line" id="bl${a.t.rm}" d="M46 ${y1} C ${W * 0.38} ${y1}, ${W * 0.62} ${y2}, ${W - 46} ${y2}" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>`;
+    }
+    for(const t of R.targets){
+      dots += `<circle class="bm-dot-t" id="bt${t.rm}" cx="40" cy="${yT.get(t.rm)}" r="4"><title>${t.id}</title></circle>`;
+    }
+    for(const c of R.controls){
+      dots += `<circle class="bm-dot-c" id="bc${c.rm}" cx="${W - 40}" cy="${yC.get(c.rm)}" r="4"><title>${c.id}</title></circle>`;
+    }
+    dots += `<text x="40" y="14" text-anchor="middle">targets</text><text x="${W - 40}" y="14" text-anchor="middle">controls</text>`;
+    $('sc5-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 8 · global greedy matching</div>
+      <h2 class="fade-up d1">Strongest pair anywhere wins, first</h2>
+      <p class="lead fade-up d2">All <b>${R.pairs.length} retained pairs</b> from every stratum are pooled and sorted by strength — the whole population competes, not per-silo. The engine walks the list top-down and assigns a pair only if <b>both sides are still free</b>. A control row is used <b>at most once, ever</b> (sampling without replacement). Watch the walk happen.</p>
+      <div class="play-row fade-up d3">
+        <button class="btn primary" id="greedyReplay">Replay the walk</button>
+        <span class="live-count" id="greedyCount">0 assigned · 0 skipped · 0 / ${SHOW} pairs shown</span>
+      </div>
+      <div class="greedy-layout">
+        <div class="pair-list fade-up d3" id="pairList">${rows}
+          ${R.walk.length > SHOW ? `<div class="pair-row" style="justify-content:center;"><span class="st">… ${R.walk.length - SHOW} more pairs fast-forwarded</span></div>` : ''}
+        </div>
+        <div class="bimap-box glass fade-up d4"><svg class="bimap" viewBox="0 0 ${W} ${H}">${lines}${dots}</svg></div>
+      </div>`;
+    $('greedyReplay').addEventListener('click', () => SCENES[5].play());
+  },
+  play(){
+    const S = st(5); clearTimers(S.timers);
+    if(S.raf) cancelAnimationFrame(S.raf);
+    const SHOW = Math.min(60, R.walk.length);
+    const rows = document.querySelectorAll('#pairList .pair-row[data-i]');
+    rows.forEach(r => { r.classList.remove('cursor', 'done-yes', 'done-no'); r.querySelector('.st').textContent = ''; });
+    document.querySelectorAll('.bm-line').forEach(l => { l.style.transition = 'none'; l.style.strokeDashoffset = '100'; });
+    document.querySelectorAll('.bm-dot-c').forEach(d => d.classList.remove('used'));
+    document.querySelectorAll('.bm-dot-t').forEach(d => d.classList.remove('matched'));
+    const count = $('greedyCount');
+    const { yT, yC, W } = this._lay;
+    let nA = 0, nS = 0;
+    const upd = () => { count.textContent = `${nA} assigned · ${nS} skipped`; };
+
+    const revealAssign = (t, c) => {
+      const line = $('bl' + t.rm);
+      if(line){ line.style.transition = 'stroke-dashoffset 0.45s ease'; line.style.strokeDashoffset = '0'; }
+      const dt = $('bt' + t.rm), dc = $('bc' + c.rm);
+      if(dt) dt.classList.add('matched');
+      if(dc) dc.classList.add('used');
+    };
+    const finish = () => {
+      for(const a of R.assignments) revealAssign(a.t, a.c);
+      rows.forEach((r, i) => {
+        const w = R.walk[i];
+        if(!w) return;
+        r.classList.add(w.out === 'assigned' ? 'done-yes' : 'done-no');
+        r.querySelector('.st').textContent = w.out === 'assigned' ? 'Assigned' : w.why;
+      });
+      nA = R.assignments.length; nS = R.walk.length - nA;
+      count.textContent = `${nA} assigned · ${nS} skipped — done`;
+    };
+    if(RM_REDUCED){ finish(); return; }
+
+    let i = 0;
+    const stepMs = 60;
+    const step = () => {
+      if(i >= SHOW){ // fast-forward whatever wasn't shown
+        for(const a of R.assignments) revealAssign(a.t, a.c);
+        nA = R.assignments.length; nS = R.walk.length - nA;
+        count.textContent = `${nA} assigned · ${nS} skipped — done`;
+        return;
+      }
+      const w = R.walk[i];
+      const row = rows[i];
+      if(!w) return; // defensive: R was swapped under a stale chain
+      rows.forEach(r => r.classList.remove('cursor'));
+      if(row){
+        row.classList.add('cursor');
+        row.scrollIntoView({ block: 'nearest' });
+        row.classList.add(w.out === 'assigned' ? 'done-yes' : 'done-no');
+        row.querySelector('.st').textContent = w.out === 'assigned' ? 'Assigned' : w.why;
+      }
+      if(w.out === 'assigned'){ nA++; revealAssign(w.t, w.c); } else { nS++; }
+      upd();
+      i++;
+      S.timers.push(setTimeout(step, stepMs));
+    };
+    S.timers.push(setTimeout(step, 350));
+  }
+};
+
+/* ---------------- Scene 6: tolerance ---------------- */
+SCENES[6] = {
+  render(){
+    const W = 600, H = 150, pad = 30;
+    const x = s => pad + s * (W - 2 * pad);
+    const jittered = R.assignments.map((a, i) => ({ a, jy: 62 + ((i * 29) % 44) - 22 }));
+    const dots = jittered.map(({ a, jy }) =>
+      `<circle class="strip-dot" data-s="${a.s}" data-lq="${a.s < R.cutoff ? 1 : 0}" cx="${x(a.s).toFixed(1)}" cy="${jy}" r="5.5"
+        fill="var(--red)"><title>${a.t.id}–${a.c.id} · ${fmt(a.s)}</title></circle>`).join('');
+    const nLow = R.kept.filter(a => a.lowQuality).length;
+    $('sc6-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 9 · tolerance filter</div>
+      <h2 class="fade-up d1">One global quality cutoff</h2>
+      <p class="lead fade-up d2">Because z-scores are global, strengths can be cut <b>across all strata at once</b>. The cutoff is the <b>${fmt(R.cfg.tolerance, 2)} quantile</b> of accepted strengths — <span class="mono">${fmt(R.cutoff, 3)}</span> right now (move the tolerance slider and watch it travel). Assignments below it are filtered — <b>except</b> each target's single strongest assignment, which is always preserved so no target silently leaves the analysis. Those survivors are flagged <span class="tag">low_quality</span>, reported, never hidden.</p>
+      <div class="strip-box glass fade-up d3">
+        <svg class="strip" viewBox="0 0 ${W} ${H}">
+          <line class="axis" x1="${pad}" y1="${H - 24}" x2="${W - pad}" y2="${H - 24}"/>
+          <text x="${pad}" y="${H - 8}">0</text>
+          <text x="${W - pad}" y="${H - 8}" text-anchor="end">strength 1.0 — identical</text>
+          ${dots}
+          <line class="cutline" id="cutline" x1="${pad}" y1="14" x2="${pad}" y2="${H - 24}"/>
+          <text id="cutlabel" x="${pad}" y="10" font-size="10" fill="var(--red-strong)" font-family="IBM Plex Mono">cutoff ${fmt(R.cutoff, 3)}</text>
+        </svg>
+      </div>
+      <div class="tol-stats">
+        <div class="ls fade-up d3"><div class="v" id="tolA">0</div><div class="k">assignments from greedy</div></div>
+        <div class="ls fade-up d3"><div class="v red" id="tolK">0</div><div class="k">kept after cutoff</div></div>
+        <div class="ls fade-up d4"><div class="v" id="tolF">0</div><div class="k">filtered out</div></div>
+        <div class="ls fade-up d4"><div class="v" id="tolL">0</div><div class="k">low_quality survivors</div></div>
+      </div>`;
+  },
+  play(){
+    const S = st(6); clearTimers(S.timers);
+    const W = 600, pad = 30;
+    const xCut = pad + R.cutoff * (W - 2 * pad);
+    const line = $('cutline'), label = $('cutlabel');
+    line.setAttribute('x1', pad); line.setAttribute('x2', pad);
+    label.setAttribute('x', pad);
+    const dots = [...document.querySelectorAll('.strip-dot')];
+    // old code set opacity 0 and 1 in the same tick, so the stagger never ran and
+    // the strip flashed instead of cascading. Hide everything, force a reflow, then
+    // reveal one dot at a time.
+    dots.forEach(d => {
+      d.style.transition = 'opacity .4s ease, transform .4s cubic-bezier(.3,1.4,.5,1)';
+      d.style.opacity = '0';
+      d.style.transform = 'translateY(7px)';
+    });
+    void document.body.offsetHeight;
+    dots.forEach((d, i) => after(140 + i * 26, () => {
+      d.style.opacity = '1';
+      d.style.transform = 'none';
+    }, S.timers));
+    animateNumber($('tolA'), R.assignments.length, 700, v => Math.round(v));
+    animateNumber($('tolK'), R.kept.length, 700, v => Math.round(v));
+    animateNumber($('tolF'), R.assignments.length - R.kept.length, 700, v => Math.round(v));
+    animateNumber($('tolL'), R.kept.filter(a => a.lowQuality).length, 700, v => Math.round(v));
+    after(500, () => {
+      line.style.transition = RM_REDUCED ? 'none' : 'x1 0.9s cubic-bezier(.3,1,.4,1), x2 0.9s cubic-bezier(.3,1,.4,1)';
+      line.setAttribute('x1', xCut); line.setAttribute('x2', xCut);
+      label.setAttribute('x', Math.min(xCut + 6, W - pad - 90));
+    }, S.timers);
+    after(1500, () => {
+      dots.forEach(d => {
+        const below = +d.dataset.s < R.cutoff;
+        const lq = d.dataset.lq === '1';
+        d.style.transition = 'opacity 0.5s, r 0.5s';
+        if(below && !lq) d.style.opacity = '0.14';
+        if(lq){ d.setAttribute('stroke', '#fff'); d.setAttribute('stroke-width', '2'); }
+      });
+    }, S.timers);
+  }
+};
+
+/* ---------------- Scene 7: verify (balance) ---------------- */
+SCENES[7] = {
+  render(){
+    const rowsDef = [
+      { v: 'income', kind: 'KS', m: R.balBefore.income, n: R.balNaive.income, role: 'match var' },
+      { v: 'tenure', kind: 'KS', m: R.balBefore.tenure, n: R.balNaive.tenure, role: 'match var' },
+      { v: 'region', kind: 'JS', m: R.balBefore.region, n: R.balNaive.region, role: 'match var' },
+      { v: 'visits', kind: 'KS', m: R.balBefore.visits, n: R.balNaive.visits, role: 'monitor var — never matched on' },
+    ];
+    const rows = rowsDef.map(r => {
+      const thr = r.kind === 'KS' ? 0.05 : 0.10;
+      const flagged = r.m > thr;
+      const maxV = Math.max(r.m, r.n, 0.01);
+      return `<div class="bal-row ${flagged && r.v === 'visits' ? 'flagged' : ''}">
+        <div class="bh"><span class="vn">${r.v} <span style="color:var(--ink-faint);font-weight:400;font-size:12px;">· ${r.role}</span></span>
+        <span class="kind">${r.kind}${flagged ? ' · <span class="flag">flagged &gt; ' + thr + '</span>' : ''}</span></div>
+        <div class="bal-bars">
+          <div class="bal-bar"><span class="who">matched control</span><div class="track"><div class="fill m" data-w="${(r.m / maxV * 100).toFixed(0)}"></div></div><span class="val">${fmt(r.m)}</span></div>
+          <div class="bal-bar"><span class="who">random pick</span><div class="track"><div class="fill n" data-w="${(r.n / maxV * 100).toFixed(0)}"></div></div><span class="val">${fmt(r.n)}</span></div>
+        </div>
+      </div>`;
+    }).join('');
+    const tMeanI = mean(R.targets.map(r => r.income));
+    const mMeanI = R.matchedC.length ? mean(R.matchedC.map(r => r.income)) : 0;
+    const nMeanI = mean(R.naive.map(r => r.income));
+    $('sc7-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 11 · balance check</div>
+      <h2 class="fade-up d1">Does the control group still look like the target?</h2>
+      <p class="lead fade-up d2">One number per column, computed on the <b>full target group</b> vs the matched controls. Numbers use <b>KS</b> (the single biggest gap between the two sorted lineups); categories use <b>JS</b> (how different the two mixes are). Match vars should be tight by construction. The monitor var — <b>visits</b>, which the engine never saw during matching — is the honest test. A random same-sized pick of controls is shown as the naive baseline.</p>
+      <div class="scan-stats fade-up d3" style="grid-template-columns:repeat(3,1fr);">
+        <div class="stat glass"><div class="v">$${fmt(tMeanI, 1)}k</div><div class="k">target · mean income</div></div>
+        <div class="stat glass"><div class="v red">$${fmt(mMeanI, 1)}k</div><div class="k">matched control · mean income</div></div>
+        <div class="stat glass"><div class="v" style="color:var(--ink-faint);">$${fmt(nMeanI, 1)}k</div><div class="k">random pick · mean income</div></div>
+      </div>
+      <div class="bal-grid fade-up d4" style="margin-top:16px;">${rows}</div>
+      <p class="thresh-note fade-up d4">Thresholds: KS &gt; 0.05 or JS &gt; 0.10 → flagged. ${R.drift.flagged ? '<b style="color:var(--red-strong);">visits is flagged — scroll on to watch the correction.</b>' : 'Nothing is flagged right now — try moving the sliders to disturb the balance.'}</p>`;
+  },
+  play(){
+    const S = st(7); clearTimers(S.timers);
+    document.querySelectorAll('#sc7 .bal-bar .fill').forEach((f, i) => {
+      f.style.width = '0';
+      after(250 + i * 110, () => { f.style.width = f.dataset.w + '%'; }, S.timers);
+    });
+  }
+};
+
+/* ---------------- Scene 8: drift correction ---------------- */
+SCENES[8] = {
+  render(){
+    const d = R.drift;
+    let body;
+    if(!d.flagged){
+      body = `<p class="lead fade-up d2">With the current settings, <b>visits</b> came back balanced (KS ≤ 0.05), so there is nothing to trim. The engine would stop here. Want to see the corrector fire? Raise <b>n_bins</b> or lower a weight in the panel — disturbing the match usually re-introduces monitor drift.</p>
+        <div class="ks-big"><div class="ls"><div class="v green">${fmt(R.balBefore.visits)}</div><div class="k">KS on visits — under threshold</div></div></div>`;
+    } else {
+      const bins = d.tShares.map((ts, b) => {
+        const cs = d.cSharesBefore[b];
+        const over = cs > ts + 1e-9;
+        return `<div class="share-bin ${over ? 'over' : ''}">
+          <div class="pair">
+            <div class="col t" data-h="${(ts * 100).toFixed(0)}"></div>
+            <div class="col c" data-h="${(cs * 100).toFixed(0)}"></div>
+          </div>
+          <div class="bl">${b < d.edges.length ? '≤' + d.edges[b] : '&gt;' + (d.edges[d.edges.length - 1] || 0)}</div>
+        </div>`;
+      }).join('');
+      const events = d.events.map((e, i) => `
+        <tr class="trim-row" data-i="${i}"><td>bin ≤${e.bin < d.edges.length ? d.edges[e.bin] : '∞'} visits</td><td>${(e.targetShare * 100).toFixed(0)}% vs ${(e.controlShare * 100).toFixed(0)}%</td><td>${e.ids.join(', ')}</td></tr>`).join('');
+      body = `
+      <p class="lead fade-up d2"><b>visits was never matched on</b>, and it drifted: some visit bands are over-represented in the matched control vs the target's share. The corrector finds those bands and <b>trims the weakest-strength matched rows first</b> — never touching strong matches, <b>never swapping in replacements</b>. Coverage can shrink; the remaining pairs never change identity.</p>
+      <div class="bal-row glass fade-up d3">
+        <div class="bh"><span class="vn">visits — share per target-quantile bin</span><span class="kind">yellow = over-represented</span></div>
+        <div class="share-bars" id="shareBars">${bins}</div>
+        <div class="legend"><span><span class="sw" style="background:var(--red);"></span>target share</span><span><span class="sw" style="background:rgba(255,255,255,0.30);"></span>matched control share</span></div>
+      </div>
+      <div class="ks-big fade-up d3">
+        <div class="ls"><div class="v red" id="ksB">0.00</div><div class="k">KS before correction</div></div>
+        <div class="ls"><div class="v green" id="ksA">0.00</div><div class="k">KS after trimming</div></div>
+        <div class="ls"><div class="v" id="nTrim">0</div><div class="k">control rows trimmed</div></div>
+      </div>
+      <table class="drift-table fade-up d4"><thead><tr><th>over-represented group</th><th>target vs control share</th><th>trimmed (weakest first)</th></tr></thead>
+      <tbody>${events || '<tr><td colspan="3">no single group over the floor — shares already even</td></tr>'}</tbody></table>
+      <p class="hint fade-up d4" style="margin-top:10px;">Trim-only is a deliberate, locked design choice: backfilling a replacement would trade match quality on the primary variables to fix a secondary one. Control group: ${R.matchedC.length} → <b style="color:var(--ink);">${R.finalC.length}</b> rows.</p>`;
+    }
+    $('sc8-inner').innerHTML = `
+      <div class="scene-tag fade-up">Module 12 · drift diagnosis &amp; correction</div>
+      <h2 class="fade-up d1">Catch the drift you didn't match on</h2>
+      ${body}`;
+  },
+  play(){
+    const S = st(8); clearTimers(S.timers);
+    document.querySelectorAll('#shareBars .col').forEach((c, i) => {
+      c.style.height = '0';
+      after(250 + i * 80, () => { c.style.height = c.dataset.h + '%'; }, S.timers);
+    });
+    if(R.drift.flagged){
+      animateNumber($('ksB'), R.balBefore.visits, 700, v => fmt(v));
+      animateNumber($('ksA'), R.balAfter.visits, 700, v => fmt(v));
+      animateNumber($('nTrim'), R.drift.events.reduce((s, e) => s + e.n, 0), 700, v => Math.round(v));
+      document.querySelectorAll('.trim-row').forEach((r, i) => {
+        after(700 + i * 450, () => r.classList.add('trimmed'), S.timers);
+      });
+    }
+  }
+};
+
+/* ---------------- footer ---------------- */
+function renderFooter(){
+  const pct = R.targets.length ? R.nMatched / R.targets.length : 0;
+  const nLow = R.kept.filter(a => a.lowQuality).length;
+  $('footerInner').innerHTML = `
+    <div class="fin">
+      <div class="ls"><div class="v"><span data-num="${R.nMatched}" data-dec="0">0</span><span class="sep"> / ${R.targets.length}</span></div><div class="k">targets matched (${(pct * 100).toFixed(0)}%)</div></div>
+      <div class="ls"><div class="v" data-num="${R.finalC.length}" data-dec="0">0</div><div class="k">final unique control rows</div></div>
+      <div class="ls"><div class="v" data-num="${R.cutoff}" data-dec="3">0</div><div class="k">strength cutoff applied</div></div>
+      <div class="ls"><div class="v" data-num="${nLow}" data-dec="0">0</div><div class="k">low_quality assignments reported</div></div>
+    </div>
+    <p>Every number on this page was computed live in your browser by a faithful re-implementation of the <span class="mono">rapidmatch</span> pipeline — target-only bin edges, global z-scores, weighted Euclidean distance, exp(−d) strengths, global greedy matching without replacement, quantile tolerance, JS/KS balance, and trim-only drift correction.</p>
+    <p>Statuses: <span class="mono">matched</span> · <span class="mono">no_control_available</span> · <span class="mono">unmatched</span> — every target row is accounted for, never silently dropped.</p>`;
+}
+function animateFooter(){
+  document.querySelectorAll('#footerInner [data-num]').forEach(el => {
+    const dec = +el.dataset.dec || 0;
+    animateNumber(el, +el.dataset.num, 900, v => Number(v).toFixed(dec));
+  });
+}
+function footerInView(){
+  const f = document.querySelector('footer');
+  if(!f) return false;
+  const r = f.getBoundingClientRect();
+  return r.top < window.innerHeight && r.bottom > 0;
+}
+
+/* ---------------- hero strip ---------------- */
+function renderHero(){
+  $('heroStrip').innerHTML = `
+    <div class="ls"><div class="v">80</div><div class="k">customers</div></div>
+    <div class="ls"><div class="v" style="color:var(--red-strong);">30 / 50</div><div class="k">target / control</div></div>
+    <div class="ls"><div class="v">2 + 1</div><div class="k">numeric + categorical match vars</div></div>
+    <div class="ls"><div class="v">1</div><div class="k">monitor var (visits)</div></div>`;
+}
+
+/* ---------------- recompute on slider change ---------------- */
+const visibleScenes = new Set();
+let swapToken = 0;
+function recompute(){
+  const token = ++swapToken;
+  const inners = [...document.querySelectorAll('.scene-inner')];
+  const foot = $('footerInner');
+
+  const apply = () => {
+    if(token !== swapToken) return; // a newer slider move already won
+    // Kill every scene's pending timers FIRST. Scene 5's play() runs a self-
+    // perpetuating setTimeout chain; if it re-renders while off-screen its
+    // play() is never re-called, so that chain would keep indexing into the new,
+    // shorter R.walk and throw on undefined.out.
+    clearTimersForAllScenes();
+    R = runPipeline(cfg);
+    const ft = POP.find(r => r.rm === focusRm);
+    if(!ft || !(R.strata[ft.stratum] || { controls: [] }).controls.length) focusRm = null;
+    for(const n of [1, 2, 3, 4, 5, 6, 7, 8]) SCENES[n].render();
+    renderFooter();
+    requestAnimationFrame(() => {
+      if(token !== swapToken) return;
+      inners.forEach(e => e.classList.remove('swapping'));
+      foot.classList.remove('swapping');
+      for(const n of visibleScenes){ if(n > 0 && SCENES[n]) SCENES[n].play(); }
+      if(footerInView()) animateFooter();
+    });
+    const pulse = $('pulse');
+    pulse.classList.add('on');
+    setTimeout(() => pulse.classList.remove('on'), 1400);
+  };
+
+  if(RM_REDUCED){ inners.forEach(e => e.classList.remove('swapping')); foot.classList.remove('swapping'); apply(); return; }
+  // fade out → swap the DOM → fade back in, so a slider drag reads as a dissolve
+  inners.forEach(e => e.classList.add('swapping'));
+  foot.classList.add('swapping');
+  setTimeout(apply, 190);
+}
+
+/* ---------------- panel wiring ---------------- */
+function wirePanel(){
+  const panel = $('panel');
+  $('panelToggle').addEventListener('click', () => panel.classList.toggle('open'));
+  let deb = 0;
+  const onInput = () => {
+    cfg.wInc = +$('sWInc').value;
+    cfg.wTen = +$('sWTen').value;
+    cfg.nBins = +$('sNBins').value;
+    const capV = +$('sCap').value;
+    cfg.cap = capV >= 9 ? null : capV;
+    cfg.tolerance = +$('sTol').value;
+    $('vWInc').textContent = fmt(cfg.wInc, 1);
+    $('vWTen').textContent = fmt(cfg.wTen, 1);
+    $('vNBins').textContent = cfg.nBins;
+    $('vCap').textContent = cfg.cap === null ? 'All' : cfg.cap;
+    $('vTol').textContent = fmt(cfg.tolerance, 2);
+    clearTimeout(deb);
+    deb = setTimeout(recompute, 180);
+  };
+  ['sWInc', 'sWTen', 'sNBins', 'sCap', 'sTol'].forEach(id => $(id).addEventListener('input', onInput));
+  $('resetCfg').addEventListener('click', () => {
+    $('sWInc').value = 1; $('sWTen').value = 1; $('sNBins').value = 3; $('sCap').value = 9; $('sTol').value = 0.8;
+    onInput();
+  });
+}
+
+/* ---------------- scroll progress + scene rail ---------------- */
+const RAIL_LABELS = ['scan', 'bin', 'z-score', 'score', 'cap', 'greedy', 'tolerance', 'balance', 'drift'];
+const rail = $('rail'), progFill = $('progFill');
+const glowA = document.querySelector('.glow.g1'), glowB = document.querySelector('.glow.g2');
+RAIL_LABELS.forEach((label, i) => {
+  const b = document.createElement('button');
+  b.className = 'rd';
+  b.type = 'button';
+  b.setAttribute('aria-label', 'Jump to scene ' + i + ': ' + label);
+  b.innerHTML = `<span class="tip">${String(i).padStart(2, '0')} · ${label}</span>`;
+  b.addEventListener('click', () => {
+    const el = document.getElementById('sc' + i);
+    if(el) el.scrollIntoView({ behavior: RM_REDUCED ? 'auto' : 'smooth', block: 'start' });
+  });
+  rail.appendChild(b);
+});
+const railDots = [...rail.querySelectorAll('.rd')];
+
+function resetGlowParallax(){
+  if(glowA) glowA.style.transform = '';
+  if(glowB) glowB.style.transform = '';
+}
+let scrollTicking = false;
+function onScroll(){
+  if(scrollTicking) return;
+  scrollTicking = true;
+  requestAnimationFrame(() => {
+    const y = window.scrollY;
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    progFill.style.width = (max > 0 ? Math.min(1, y / max) * 100 : 0).toFixed(2) + '%';
+    rail.classList.toggle('show', y > window.innerHeight * 0.45);
+    if(!RM_REDUCED){ // fixed glows drift slower than the page — cheap parallax
+      glowA.style.transform = `translate3d(0,${(y * 0.12).toFixed(1)}px,0)`;
+      glowB.style.transform = `translate3d(0,${(-y * 0.08).toFixed(1)}px,0)`;
+    }
+    scrollTicking = false;
+  });
+}
+window.addEventListener('scroll', onScroll, { passive: true });
+window.addEventListener('resize', onScroll, { passive: true });
+onScroll();
+
+/* ---------------- init ---------------- */
+renderHero();
+for(const n of [0, 1, 2, 3, 4, 5, 6, 7, 8]) SCENES[n].render();
+renderFooter();
+wirePanel();
+
+// forced reflow first, otherwise the hero's from-state is never painted and the
+// whole entrance collapses into a no-op
+void document.body.offsetHeight;
+requestAnimationFrame(() => document.body.classList.add('booted'));
+
+const observer = new IntersectionObserver(entries => {
+  for(const e of entries){
+    const n = +e.target.id.slice(2);
+    if(e.isIntersecting){
+      e.target.classList.add('in');
+      visibleScenes.add(n);
+      SCENES[n].play();
+    } else {
+      visibleScenes.delete(n);
+    }
+    if(railDots[n]) railDots[n].classList.toggle('active', e.isIntersecting);
+  }
+}, { threshold: 0.28 });
+document.querySelectorAll('.scene').forEach(s => observer.observe(s));
+
+const footerObserver = new IntersectionObserver(entries => {
+  for(const e of entries){
+    if(e.isIntersecting){ animateFooter(); footerObserver.unobserve(e.target); }
+  }
+}, { threshold: 0.3 });
+footerObserver.observe(document.querySelector('footer'));
+
+// exposed for parity testing against the real rapidmatch engine
+window.__RM__ = { POP, runPipeline, get R(){ return R; }, get cfg(){ return cfg; } };
 </script>
 </body>
 </html>
