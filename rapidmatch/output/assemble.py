@@ -29,7 +29,7 @@ class MatchResult:
     Attributes:
         pairs: One row per (target, control) match, plus one leftover row
             per unmatched target.
-        targets: One row per target with rolled-up status.
+        targets: One row per target with rolled-up status and quality status.
         cutoff: Strength quantile that was actually applied.
         coverage_summary: Counts and percent matched.
         report: Module 13 artifacts (coverage / balance / drift log / profile).
@@ -80,6 +80,8 @@ def assemble(
                 p.match_strength,
                 p.match_rank,
                 'matched' AS match_status,
+                CASE WHEN p.match_strength < {cutoff}
+                     THEN 'low_quality' ELSE 'acceptable' END AS quality_status,
                 (th.target_rm_id IS NOT NULL) AS thin_stratum
             FROM _rm_pairs p
             JOIN v_stratified t ON t._rm_id = p.target_rm_id
@@ -97,6 +99,7 @@ def assemble(
                 NULL::DOUBLE AS match_strength,
                 NULL::BIGINT AS match_rank,
                 COALESCE(s.status, 'unmatched') AS match_status,
+                NULL::VARCHAR AS quality_status,
                 (th.target_rm_id IS NOT NULL) AS thin_stratum
             FROM v_stratified t
             LEFT JOIN _rm_status s ON s.target_rm_id = t._rm_id
@@ -127,6 +130,11 @@ def assemble(
                     WHEN 1 THEN 'no_control_available'
                     ELSE 'unmatched'
                 END AS match_status,
+                CASE
+                    WHEN BOOL_OR(quality_status = 'low_quality') THEN 'low_quality'
+                    WHEN BOOL_OR(match_status = 'matched') THEN 'acceptable'
+                    ELSE 'none'
+                END AS quality_status,
                 BOOL_OR(thin_stratum) AS thin_stratum,
                 MAX(match_strength) AS best_strength
             FROM v_pairs_rm
@@ -227,11 +235,24 @@ def _coverage_summary(targets: pa.Table, cutoff: float) -> dict[str, Any]:
     n_below = statuses.count("below_tolerance")
     n_unmatched = statuses.count("unmatched")
     n_thin = targets["thin_stratum"].to_pylist().count(True)
+    quality = (
+        targets["quality_status"].to_pylist()
+        if "quality_status" in targets.column_names
+        else []
+    )
+    n_low_quality = quality.count("low_quality")
+    n_unique_controls = (
+        sum(int(value or 0) for value in targets["n_matches"].to_pylist())
+        if "n_matches" in targets.column_names
+        else n_matched
+    )
     return {
         "n_target": n,
         "n_matched": n_matched,
+        "n_unique_controls": n_unique_controls,
         "n_no_control": n_no,
         "n_below_tolerance": n_below,
+        "n_low_quality": n_low_quality,
         "n_thin_stratum": n_thin,
         "tolerance_cutoff": cutoff,
         "pct_matched": (n_matched / n) if n else 0.0,

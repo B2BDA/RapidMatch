@@ -13,8 +13,15 @@ and inspect the result. Everything else lives in one-job modules that
 """
 
 from rapidmatch.config import MatchConfig
+from rapidmatch.data_report.report import InsufficientControlPoolWarning
 from rapidmatch.output.assemble import MatchResult
 from rapidmatch.pipeline import ControlMatcher
 from rapidmatch.reporting.report import Report
 
-__all__ = ["ControlMatcher", "MatchConfig", "MatchResult", "Report"]
+__all__ = [
+    "ControlMatcher",
+    "InsufficientControlPoolWarning",
+    "MatchConfig",
+    "MatchResult",
+    "Report",
+]

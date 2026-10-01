@@ -8,12 +8,17 @@ batched DuckDB query for nulls + target/control counts, plus an
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, Optional
 
 import duckdb
 
 from rapidmatch._sql import quote_ident
 from rapidmatch.ingestion.validate import column_types, is_numeric_dtype
+
+
+class InsufficientControlPoolWarning(UserWarning):
+    """The untreated pool cannot provide full unique 1:1 target coverage."""
 
 
 class DataReport:
@@ -63,6 +68,15 @@ class DataReport:
         n_rows = int(row[0] or 0)
         n_target = int(row[1] or 0)
         n_control = int(row[2] or 0)
+        if n_control < n_target:
+            warnings.warn(
+                f"Control pool has {n_control:,} rows but the target group has "
+                f"{n_target:,} rows. Matching without replacement cannot provide "
+                "a full target-sized pseudo-control group without relaxing match "
+                "quality or reusing controls; some targets may remain unmatched.",
+                InsufficientControlPoolWarning,
+                stacklevel=2,
+            )
         treatment_values = [v for v in (row[3] or [])]
         n_treatment_null = int(row[4] or 0)
         null_counts = {}

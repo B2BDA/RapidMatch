@@ -9,6 +9,8 @@ def test_report_assembles_three_artifacts() -> None:
     targets = pa.table(
         {
             "match_status": ["matched", "matched", "below_tolerance"],
+            "quality_status": ["acceptable", "low_quality", "none"],
+            "n_matches": [1, 1, 0],
             "thin_stratum": [False, True, False],
         }
     )
@@ -23,6 +25,8 @@ def test_report_assembles_three_artifacts() -> None:
     ]
     report = build_report(targets, cutoff=0.4, before=before, after=after, events=events)
     assert report.coverage["n_matched"] == 2
+    assert report.coverage["n_unique_controls"] == 2
+    assert report.coverage["n_low_quality"] == 1
     assert report.coverage["tolerance_cutoff"] == 0.4
     assert report.balance["variable"].to_pylist() == ["seg"]
     assert report.drift_log["n_removed"].to_pylist() == [2]

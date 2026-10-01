@@ -50,6 +50,24 @@ def test_pipeline_covers_every_target() -> None:
     assert "null_counts" in result.report.data_profile
 
 
+def test_tolerance_preserves_primary_coverage_and_marks_quality() -> None:
+    cfg = MatchConfig(
+        match_vars=["income", "age", "region"],
+        treatment_col="is_target",
+        n=1,
+        tolerance=0.8,
+        min_control_pool_size=1,
+        n_bins=3,
+    )
+    result = ControlMatcher(cfg).fit_match(_frame())
+    target_statuses = result.targets["match_status"].to_pylist()
+    quality_statuses = result.targets["quality_status"].to_pylist()
+    assert "below_tolerance" not in target_statuses
+    assert set(quality_statuses) <= {"acceptable", "low_quality", "none"}
+    assert result.coverage_summary["n_low_quality"] >= 0
+    assert result.coverage_summary["n_unique_controls"] == result.coverage_summary["n_matched"]
+
+
 def test_thin_flag_can_coexist_with_matched() -> None:
     cfg = MatchConfig(
         match_vars=["income", "region"],

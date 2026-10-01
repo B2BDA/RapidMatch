@@ -1,3 +1,3 @@
-from rapidmatch.data_report.report import DataReport
+from rapidmatch.data_report.report import DataReport, InsufficientControlPoolWarning
 
-__all__ = ["DataReport"]
+__all__ = ["DataReport", "InsufficientControlPoolWarning"]

@@ -210,7 +210,11 @@ class ControlMatcher:
         log.emit("match", assigned=len(assignments), pairs=len(all_t))
         stage("match")
 
-        kept, below, cutoff = apply_tolerance(assignments, cfg.tolerance)
+        kept, below, cutoff = apply_tolerance(
+            assignments,
+            cfg.tolerance,
+            preserve_primary=True,
+        )
         self.cutoff = cutoff
         log.emit(
             "tolerance",

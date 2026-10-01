@@ -1,4 +1,4 @@
-"""Coverage summary artifact: % matched / no control / below tolerance."""
+"""Coverage summary artifact: coverage and retained match quality."""
 
 from __future__ import annotations
 
@@ -22,6 +22,17 @@ def build_coverage_summary(
         n_matched = counts["matched"]
         n_no = counts["no_control_available"]
         n_below = counts["below_tolerance"]
+        quality = (
+            targets["quality_status"].to_pylist()
+            if "quality_status" in targets.column_names
+            else []
+        )
+        n_low_quality = quality.count("low_quality")
+        n_unique_controls = (
+            sum(int(value or 0) for value in targets["n_matches"].to_pylist())
+            if "n_matches" in targets.column_names
+            else n_matched
+        )
         if n_unmatched is None:
             n_unmatched = counts["unmatched"]
         if "thin_stratum" in targets.column_names:
@@ -30,14 +41,18 @@ def build_coverage_summary(
             n_thin = 0
     else:
         n_matched = n_no = n_below = 0
+        n_low_quality = 0
+        n_unique_controls = 0
         if n_unmatched is None:
             n_unmatched = 0
         n_thin = 0
     return {
         "n_target": n,
         "n_matched": n_matched,
+        "n_unique_controls": n_unique_controls,
         "n_no_control": n_no,
         "n_below_tolerance": n_below,
+        "n_low_quality": n_low_quality,
         "n_unmatched": int(n_unmatched),
         "n_thin_stratum": n_thin,
         "pct_matched": (n_matched / n) if n else 0.0,
