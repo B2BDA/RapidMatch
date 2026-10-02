@@ -29,6 +29,7 @@ Optional extras:
 uv add "rapidmatch[excel]"    # Excel support (openpyxl)
 uv add "rapidmatch[progress]" # terminal progress bars (tqdm)
 uv add "rapidmatch[dev]"      # development / testing
+uv add "rapidmatch[notebook]"  # notebook representation plots (matplotlib)
 ```
 
 ### Alternative — pip
@@ -43,6 +44,7 @@ Optional extras:
 pip install "rapidmatch[excel]"    # Excel support (openpyxl)
 pip install "rapidmatch[progress]" # terminal progress bars (tqdm)
 pip install "rapidmatch[dev]"      # development / testing
+pip install "rapidmatch[notebook]"  # notebook representation plots (matplotlib)
 ```
 
 ### Requirements
