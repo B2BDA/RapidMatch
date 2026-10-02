@@ -311,29 +311,115 @@ cared about (`match_vars`) and every variable you only watch (`monitor_vars`):
 | Kind of column | The number | `0` means | A high value means |
 |----------------|------------|-----------|--------------------|
 | Categories (`occupation`…) | **JS** | the two mixes are the same | the recipes drifted apart |
-| Numbers (`age`…) | **KS** | the two groups climb at the same pace | they pull apart somewhere |
+| Numbers (`age` / `income`…) | **KS** | the two groups climb at the same pace | they pull apart somewhere |
 
-**Categories — JS, "did the recipe change?"** Imagine each group as a bowl of
-marbles, one color per occupation. JS is how different the two bowls look:
-`0` = same mix, `1` = nothing in common. In the toy run, matched `occupation`
-lands at JS ≈ `0.18` versus `0.41` for a random pick of controls — the
-matched set tracks the target's mix much more closely.
+---
 
-**Numbers — KS, "where do the two lineups drift the most?"** Line both groups
-up from smallest to largest (say age in years). Walk along that line and,
-at every value, ask: *what share of the target is at or below this, and what
-share of the matched controls?* KS is the **single biggest gap** between those
-two shares.
+#### Categories — JS Distance (worked example)
 
-A tiny example. Matched-control ages `[25, 28, 31, 34, 34, 38]`. At age `30`,
-only 2 of 6 controls are at or below 30 (about a third). If the target's share
-at that same point is very different, that gap counts. KS keeps only the
-**tallest** of those gaps across the whole column. `0` = the groups rise
-together; small = close enough; large = one group is packed low (or high)
-while the other isn't.
+JS Distance tells you **how different two categorical distributions are**.
 
-That is the `0.09` vs `0.47` on the Verify screen: before matching the
-lineups disagree; after matching they almost climb in lockstep.
+**Example data** — preferred payment method in two groups of 100 people each:
+
+| Payment Method | Group A (P) | Group B (Q) |
+|----------------|-------------|-------------|
+| Credit Card    | 0.50        | 0.20        |
+| UPI            | 0.30        | 0.50        |
+| Cash           | 0.20        | 0.30        |
+
+**Step 1.** Build the mixture distribution M = (P + Q) / 2:
+
+| Payment Method | M        |
+|----------------|----------|
+| Credit Card    | 0.35     |
+| UPI            | 0.40     |
+| Cash           | 0.25     |
+
+**Step 2.** Compute KL(P ‖ M) and KL(Q ‖ M) (base-2 log):
+
+- KL(P ‖ M) ≈ 0.0684
+- KL(Q ‖ M) ≈ 0.0784
+
+**Step 3.** JS Divergence = ½ × KL(P‖M) + ½ × KL(Q‖M) ≈ **0.0734**
+
+**Step 4.** JS Distance (commonly reported) = √(JS Divergence) ≈ **0.271**
+
+**Intuition:** Imagine two bowls of marbles, one colour per category.
+JS measures how different the two bowls look by comparing each to their
+average mix. `0` = identical mix; larger values = more different.
+In the toy run, matched `occupation` lands at JS ≈ `0.18` versus `0.41`
+for a random pick of controls — the matched set tracks the target far more closely.
+
+---
+
+#### Numbers — KS Statistic (worked example)
+
+KS measures the **single biggest gap** between the two empirical cumulative
+distribution functions (ECDFs).
+
+**Example data** — 10 people with income and a binary target:
+
+| Person | Income | Target |
+|--------|--------|--------|
+| A      | 20     | 0      |
+| B      | 30     | 0      |
+| C      | 40     | 1      |
+| D      | 50     | 0      |
+| E      | 60     | 1      |
+| F      | 70     | 1      |
+| G      | 80     | 0      |
+| H      | 90     | 1      |
+| I      | 100    | 1      |
+| J      | 110    | 0      |
+
+**Step 1.** Split by target:
+
+- Yes (Target=1): 40, 60, 70, 90, 100  (5 people)
+- No  (Target=0): 20, 30, 50, 80, 110  (5 people)
+
+**Step 2.** At every income value compute the cumulative % of each group
+that is ≤ that value, then take the absolute difference:
+
+| Income | % Yes ≤ | % No ≤ | |Difference| |
+|--------|---------|--------|-------------|
+| 20     | 0 %     | 20 %   | 20 %        |
+| 30     | 0 %     | 40 %   | **40 %**    |
+| 40     | 20 %    | 40 %   | 20 %        |
+| 50     | 20 %    | 60 %   | **40 %**    |
+| 60     | 40 %    | 60 %   | 20 %        |
+| 70     | 60 %    | 60 %   | 0 %         |
+| 80     | 60 %    | 80 %   | 20 %        |
+| 90     | 80 %    | 80 %   | 0 %         |
+| 100    | 100 %   | 80 %   | 20 %        |
+| 110    | 100 %   | 100 %  | 0 %         |
+
+**Step 3.** The largest gap is **40 %** → **KS = 0.40**
+
+**Visual intuition:**
+
+```
+% of people
+100% |                          /----- Yes
+     |                       /
+ 80% |                    /          /----- No
+     |                 /          /
+ 60% |              /          /
+     |           /          /
+ 40% |        /          /
+     |     /          /
+ 20% |  /          /
+  0% |/__________/________________ income
+     20  30  40  50  60  70  80  90 100 110
+```
+
+The two climbing lines are farthest apart (vertically) at incomes 30 and 50.
+That tallest vertical distance is the KS statistic.
+
+`0` = the groups rise together; small = close enough; large = one group is
+packed low (or high) while the other isn’t.
+In the library’s Verify screen you typically see something like `0.09` after
+matching versus `0.47` before — the lineups almost climb in lockstep once
+matched.
 
 **5 — Trim control rows that caused monitor drift (weakest matches first).**
 
