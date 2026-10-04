@@ -7,13 +7,15 @@ it calls one-job modules in the order locked in plan.md:
     -> coverage -> score -> greedy match -> tolerance -> assemble
     -> balance check -> drift trim -> report
 
-Everything below `v_stratified` is pulled into PyArrow (never pandas):
-rows are consumed with zero-copy NumPy views, so a 7M-row run keeps a flat,
-streaming-friendly in-memory footprint.
+The projected `v_stratified` data is pulled into PyArrow (never pandas).
+Pair storage depends on stratum sizes and the optional candidate cap; preflight
+capacity reports expose that work before scoring.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
+from numbers import Integral
 from typing import Any, Optional
 
 import numpy as np
@@ -26,6 +28,7 @@ from rapidmatch.balance.checker import check_balance
 from rapidmatch.binning.stratifier import Stratifier
 from rapidmatch.config import MatchConfig
 from rapidmatch.coverage.flag_coverage import flag_coverage
+from rapidmatch.coverage.capacity import CapacityReport, add_trials, build_capacity
 from rapidmatch.data_report.report import DataReport
 from rapidmatch.drift.correct import correct_drift
 from rapidmatch.ingestion.ingest import ingest
@@ -96,6 +99,42 @@ class ControlMatcher:
             # parked at an intermediate percentage (e.g. 90%).
             stages.close()
 
+    def assess(
+        self, data: Any, *, n_bins_candidates=None,
+        max_report_strata: int = 1000, work_dir: Optional[str] = None,
+    ) -> CapacityReport:
+        """Measure capacity and optional bin trials without scoring or matching.
+
+        Uses one ingestion. Neither this matcher's config, bin_edges, nor cutoff
+        is changed. Detail rows are bounded; summary/trial totals are complete.
+        """
+        candidates = list(n_bins_candidates or [])
+        if any(isinstance(v, bool) or not isinstance(v, Integral) or v < 2 for v in candidates):
+            raise ValueError("n_bins_candidates must contain integers >= 2")
+        with ingest(data, work_dir=work_dir) as session:
+            con = session.con
+            cfg = self.config
+            if cfg.duckdb_threads:
+                con.execute(f"SET threads = {cfg.duckdb_threads}")
+            profile = DataReport(con, cfg.treatment_col).summary()
+            types = validate_schema(con, cfg, treatment_values=profile["treatment_values"])
+            numeric, categorical = classify_match_vars(types, cfg.match_vars)
+            group_numeric = [v for v in numeric if v in cfg.grouping_vars]
+            handle_missing(con, cfg.treatment_col, numeric, categorical)
+            reports = []
+            for bins in dict.fromkeys([cfg.n_bins, *candidates]):
+                trial_cfg = replace(cfg, n_bins=int(bins))
+                stratifier = Stratifier(n_bins=int(bins))
+                counts = stratifier.run(con, group_numeric, categorical, missing_vars=numeric)
+                reports.append(build_capacity(
+                    counts, trial_cfg, stratifier.edges, con=con, numeric=numeric,
+                    max_report_strata=max_report_strata,
+                ))
+            report = reports[0]
+            if candidates:
+                add_trials(report, [r.summary for r in reports])
+            return report
+
     def _run_stages(self, con, cfg, stage, log) -> MatchResult:
         # Lazy object; materialize here because the pipeline is a terminal point.
         rss = rss_mb()
@@ -129,8 +168,12 @@ class ControlMatcher:
         stage("missing")
 
         stratifier = Stratifier(n_bins=cfg.n_bins)
-        counts = stratifier.run(con, numeric, categorical)
+        group_numeric = [v for v in numeric if v in cfg.grouping_vars]
+        counts = stratifier.run(con, group_numeric, categorical, missing_vars=numeric)
         self.bin_edges = stratifier.edges
+        capacity = build_capacity(
+            counts, cfg, stratifier.edges, con=con, numeric=numeric, emit_warning=True,
+        )
         coverage = flag_coverage(
             counts,
             min_control_pool_size=cfg.min_control_pool_size,
@@ -208,6 +251,17 @@ class ControlMatcher:
         else:
             assignments = []
         log.emit("match", assigned=len(assignments), pairs=len(all_t))
+        capacity.summary["assignments_before_tolerance"] = len(assignments)
+        if (cfg.max_candidates_per_target is not None
+                and len(assignments) < capacity.summary["assignment_capacity_ceiling"]
+                and capacity.summary["retained_candidate_pairs"] < capacity.summary["candidate_pairs"]):
+            capacity.recommendations.append({
+                "setting": "max_candidates_per_target",
+                "proposed_value": cfg.max_candidates_per_target * 2,
+                "reason": "The capped run assigned fewer controls than the unpruned structural ceiling; try a larger cap.",
+                "evidence": "untested_suggestion",
+                "tradeoff": "More retained pairs require more memory; this does not guarantee full coverage.",
+            })
         stage("match")
 
         kept, below, cutoff = apply_tolerance(
@@ -216,6 +270,7 @@ class ControlMatcher:
             preserve_primary=True,
         )
         self.cutoff = cutoff
+        capacity.summary["assignments_after_tolerance"] = len(kept)
         log.emit(
             "tolerance",
             kept=len(kept),
@@ -255,6 +310,15 @@ class ControlMatcher:
             n_bins=cfg.n_bins,
         )
         kept = [a for a in kept if int(a[1]) in correction.kept_control_ids]
+        capacity.summary["assignments_after_drift"] = len(kept)
+        capacity.summary["drift_removed"] = sum(e.n_removed for e in correction.events)
+        if capacity.summary["drift_removed"]:
+            capacity.recommendations.append({
+                "setting": "monitor_vars", "proposed_value": None,
+                "reason": "Inspect report.drift_log for the monitor groups whose correction removed controls.",
+                "evidence": "measured_drift_removals",
+                "tradeoff": "Coverage fell during balance correction; changing numeric bins alone is not a proven remedy.",
+            })
         log.emit(
             "drift",
             kept=len(kept),
@@ -300,6 +364,7 @@ class ControlMatcher:
             correction.events,
             profile,
         )
+        result.report.capacity = capacity
         result.coverage_summary = result.report.coverage
         stage("report")
         log.emit(

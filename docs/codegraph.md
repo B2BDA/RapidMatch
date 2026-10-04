@@ -2,7 +2,8 @@
 
 Read this file first. It is the map of the running code. `plan.md` is the
 locked product design (14 modules). This file describes what is actually
-built today (modules 1-13). Module 14 (FastAPI) is deferred.
+built today (modules 1-13, capacity preflight, and label-aware downsampling).
+Module 14 (FastAPI) is deferred.
 
 Pronunciation: RiMatch = "rematch". Package import name: `rapidmatch`.
 
@@ -46,6 +47,7 @@ result.cutoff
 result.report             # Module 13: coverage / balance / drift_log / data_profile
 result.report.balance     # before/after JS or KS per variable
 result.report.drift_log   # rows trimmed from over-represented monitor groups
+result.report.capacity    # capacity ceilings, bounded strata, recommendations
 ```
 
 Entry point: `rapidmatch/pipeline.py` -> `ControlMatcher.fit_match`.
@@ -76,6 +78,7 @@ rapidmatch/
     get_stratum_counts.py     GROUP BY target/control counts
   coverage/
     flag_coverage.py          Module 6  no_control / thin / eligible
+    capacity.py               structural capacity, work counts, tuning guidance
   scoring/
     scorer.py                 Module 7  global z-score, weighted Euclidean, exp(-d);
                                         Gram 2D distance; repeat/tile pair ids
@@ -100,6 +103,13 @@ rapidmatch/
     build_coverage_summary.py coverage percents + cutoff
     build_balance_table.py    before/after JS/KS table
     build_drift_log.py        audit of trimmed control rows
+  sampling/
+    config.py                 SamplingConfig validation / generated-or-explicit seed
+    prepare.py                stable identity, full-population edges, JSON group keys
+    allocate.py               label-first largest-remainder quotas + seeded selection
+    balance.py                exact SQL KS/JS, overall and optional within-label
+    report.py                 DownsampleResult/Report, bounded tables, full acceptance
+    sampler.py                random_downsample orchestration, session cleanup
 tests/                        1:1 with the step files above
 demo.py                       CLI smoke run
 demo.ipynb                    interactive walkthrough
@@ -291,7 +301,7 @@ fit_match(data)
 
 1. No control row reused (without replacement).
 2. `match_strength` in `(0, 1]`.
-3. Bin edges derived from target (`_treatment=1`) only.
+3. Matching bin edges derived from target (`_treatment=1`) only; sampling uses the full population.
 4. Z-score moments are global on the target group, never per stratum.
 5. Every target row appears in `result.targets` (never silently dropped).
 6. Missing flags affect stratification only, not distance.
@@ -350,3 +360,64 @@ Key tests:
 `rapidmatch/ingestion/data_loader.py` is a copy of RapidSegment
 `UniversalDataLoader`. Treat it as an upstream dependency that happens to
 live in-tree. Do not rewrite it. If upstream changes, replace the file.
+
+## 12. Capacity preflight and downsampling (2026-10-04)
+
+`ControlMatcher.assess(data, n_bins_candidates=None, max_report_strata=1000,
+work_dir=None)` returns `CapacityReport(summary, strata, bin_edges,
+recommendations, trials)`. It ingests once, profiles/validates, prepares missingness,
+then compares requested bin settings without scoring or a full Arrow pull. It does
+not change matcher state. `fit_match` attaches the baseline report and emits one
+aggregate stratum warning before scoring. Global shortage and thin-pool flags
+remain separate. Capacity uses Python integer arithmetic for pair totals.
+
+`MatchConfig.stratify_vars=None` preserves legacy behavior. An explicit subset of
+`match_vars` selects numeric grouping dimensions; all numeric match vars still
+score. Categorical matching vars must remain grouped; missingness flags for every
+numeric matching variable remain in the key, including score-only features.
+
+`random_downsample(data, *, sample_size, label_col=None, stratify_vars=(),
+check_vars=(), n_bins=4, random_state=None, ks_threshold=.05, js_threshold=.10,
+check_by_label=False, duckdb_threads=None, max_report_rows=1000, work_dir=None,
+keep_db=False)` returns `DownsampleResult(sample, report, row_ids)`.
+
+```text
+ingest -> sampling.prepare_population
+  _rs_source: serial materialization of source row identity (original columns retained)
+  _rs_population: global feature bins -> JSON label/group keys (NULL != literal text)
+allocate
+  _rs_classes: integer label budgets, from actual population proportions
+  _rs_quotas: conditional feature quotas, using each fixed label budget
+select_rows
+  _rs_selected: row ids chosen by seeded MD5 priorities without replacement
+  _rs_sample: selected source rows + bookkeeping, still inside DuckDB
+check_population_balance
+  _rs_balance: frequency/CDF SQL; no Python population-column pull
+build_sampling_report -> bounded classes/strata/balance + full aggregate status
+pull selected original columns and separate row ids -> close session
+```
+
+Allocation uses HUGEINT products and integer division/remainders at both levels.
+Tie priority is seeded independently for classes, feature groups, and rows. Fixed
+input/order, seed, and versions give thread-independent results. Report tables
+are capped; summary totals and required-check acceptance are computed over all
+groups/checks. Missing labels are a class, numeric class codes stay categorical,
+and redundant label references in grouping/checking are normalized away.
+
+No label and no grouping means simple random sampling. Label-only sampling is
+class-stratified random sampling. Missing/nonfinite numeric features are grouped
+explicitly; KS uses finite values and reports missing rates. Numeric outcomes for
+regression can be grouping/check vars rather than categorical labels.
+
+Sampling invariants: exact requested count; no repeated source-row identity;
+exact rounded class budgets; inner quotas sum to outer budgets. Failures of these
+are errors. Feature-balance acceptance is `pass`, `fail`, or `not_evaluated`;
+optional within-label checks are required when enabled. JS on Y is descriptive,
+not a replacement for count invariants. Failed acceptance returns the exact-sized
+sample with recommendations; it does not trim rows, adjust classes, or relax
+thresholds. Tests: `tests/sampling/`, `tests/coverage/test_capacity.py`.
+
+Examples: `demo_downsample.py` is a small passing smoke run.
+`demo_ml_downsample.py [output_directory]` is the README's full ML walkthrough:
+100,000-row synthetic Parquet input, initial sample assessment, recommendation
+interpretation, an explicit larger request if needed, and sample/report export.

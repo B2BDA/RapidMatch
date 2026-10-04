@@ -72,8 +72,9 @@ class DataReport:
             warnings.warn(
                 f"Control pool has {n_control:,} rows but the target group has "
                 f"{n_target:,} rows. Matching without replacement cannot provide "
-                "a full target-sized pseudo-control group without relaxing match "
-                "quality or reusing controls; some targets may remain unmatched.",
+                "a full target-sized pseudo-control group. Changing bins or "
+                "quality thresholds cannot create additional unique controls; "
+                "some targets may remain unmatched.",
                 InsufficientControlPoolWarning,
                 stacklevel=2,
             )

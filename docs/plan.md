@@ -3,10 +3,11 @@
 **Status:** Matching v1 is implemented (Modules 1-13) as the `rapidmatch` Python
 package. DuckDB production path, full-target comparison, and the global
 control-pool warning are live. Module 14 (FastAPI) is not started.
-**Next increment (2026-10-04):** stratum-capacity diagnostics, actionable tuning
+**Completed increment (2026-10-04):** stratum-capacity diagnostics, actionable tuning
 recommendations, separate grouping/scoring roles, and exact-size proportional
-stratified random downsampling. Product direction approved; the implementation
-plan in §4 is awaiting review before any code changes. All §4 work is unimplemented.
+stratified random downsampling, with optional label-first class preservation.
+All five implementation stages are complete. Verification: 105 tests passed,
+matching and downsampling demos passed; see §4.6 for details.
 `UniversalDataLoader` is vendored from RapidSegment into
 `rapidmatch/ingestion/data_loader.py`. Running-code map: `codegraph.md`.
 See §8 Changelog for details.
@@ -16,7 +17,8 @@ collaborator picking up this project should be able to read this file alone and 
 exactly what's decided, what's built, and what's left.
 
 **Package:** RapidMatch (short form **RiMatch**, pronounced "rematch"). Import name:
-`rapidmatch`. Public entry: `ControlMatcher(MatchConfig(...)).fit_match(data)`.
+`rapidmatch`. Public entries: `ControlMatcher(MatchConfig(...)).fit_match(data)`,
+`ControlMatcher.assess(...)`, and `random_downsample(data, sample_size=...)`.
 
 ---
 
@@ -39,11 +41,13 @@ and may never be reused. When the available control pool or feature overlap
 cannot support full coverage, RapidMatch must report that limitation rather than
 silently changing the target population or reusing controls.
 
-The approved next increment also supports memory-driven downsampling of an ML
+The library also supports memory-driven downsampling of an ML
 training population or other user-supplied dataset. This entry point needs no
 treatment column: it selects exactly the user-requested number of unique source
 rows, allocates sample slots proportionally across chosen strata, and checks the
-sample against the **whole supplied population**. Details and review items: §4.
+sample against the **whole supplied population**. With optional `label_col`, first
+preserve the class proportions observed in that population, then allocate within
+each class's feature strata. Contracts and implementation details: §4.
 
 ## 2. Prior direction (superseded)
 
@@ -58,8 +62,8 @@ architecture or code.
 
 ## 3. Locked design decisions (matching v1)
 
-This section describes the implemented matching contract. Planned extensions and
-the separate downsampling contract are in §4; they are not implemented APIs yet.
+This section describes the original matching v1 contract. Its backward-compatible
+extensions and the implemented downsampling contract are in §4.
 
 | Decision | Choice |
 |---|---|
@@ -278,12 +282,11 @@ built in parallel.
 - [ ] Basic error handling + validation responses (e.g. missing treatment column,
        unknown variable names)
 
-## 4. Next increment — capacity guidance & exact-size downsampling
+## 4. Capacity guidance & exact-size downsampling (implemented)
 
-**Status:** Product direction approved on 2026-10-04. This is a documentation-only
-implementation proposal for user review. Complete that review before changing
-application code. The existing module completion marks above describe matching
-v1, not the work below. FastAPI remains deferred.
+**Status:** Built and verified on 2026-10-04 after the documented refinements.
+The existing module completion marks above describe matching v1. Completed stage
+status and verified results are tracked in §4.6. FastAPI remains deferred.
 
 ### 4.1 Agreed outcomes
 
@@ -299,6 +302,15 @@ v1, not the work below. FastAPI remains deferred.
 5. The user supplies `sample_size`. A successful call returns **exactly that many
    rows**, without replacement. Recommendations never change the requested size
    or grouping configuration automatically.
+6. Optional `label_col` identifies the ML classification outcome. Infer its class
+   proportions from the supplied dataset, not from a user-specified 1:0 ratio.
+   Allocate the requested sample to classes first, then to feature strata within
+   each class, preserving those class quotas throughout selection.
+7. Verify feature representation against the full supplied dataset using explicit,
+   configurable balance thresholds. Exact size, preserved overall Y proportions
+   (subject to integer rounding), and verified feature similarity are the three
+   output objectives. Feature balance is an acceptance check, not merely a list
+   of statistics; report when the generated sample does not meet it.
 
 ### 4.2 Matching: capacity diagnostics and actionable recommendations
 
@@ -349,11 +361,12 @@ number necessarily left without controls. Show readable grouping values/bin
 ranges and sort the detail table by shortfall. Attach diagnostics to the result
 report without changing existing match statuses or coverage-key meanings.
 
-**Preflight proposal:** add an explicit assessment operation, provisionally
+**Preflight API:** the explicit assessment operation
 `ControlMatcher.assess(data, n_bins_candidates=[4, 3, 2])`. It profiles and counts
 candidate stratifications without scoring or matching, using one ingested source.
 Ordinary `fit_match` runs get the lightweight current-setting diagnostic; broader
-what-if scans are opt-in. Exact public names/report types are review items.
+what-if scans are opt-in. It returns `CapacityReport`; a matching result also
+exposes its baseline report at `result.report.capacity`.
 
 For each trial, report the actual bin setting, capacity ceiling, shortfall,
 target-bearing strata, total candidate pairs `sum_s T_s * C_s`, and largest
@@ -386,21 +399,21 @@ With 100 numeric features, even two bins per feature permit `2**100` combination
 Only observed strata are materialized, but many can be tiny or lack controls.
 Reducing `n_bins` alone may therefore be insufficient.
 
-**Proposed backward-compatible shape for review:** add optional `stratify_vars`
-to `MatchConfig`, as a subset of `match_vars`. `None` preserves today's behavior:
+**Implemented backward-compatible shape:** optional `stratify_vars` on
+`MatchConfig` is a subset of `match_vars`. `None` preserves the original behavior:
 all matching features form strata. An explicit subset limits numeric binning to
 that subset, while all numeric `match_vars` continue to contribute to weighted
 distance using global target moments. `monitor_vars` retain their current role.
 This provides the grouping/scoring distinction without requiring existing callers
 to migrate to a new `score_vars` parameter.
 
-Two edge policies must be reviewed explicitly:
+Implemented edge policies:
 
-- **Categorical similarity:** the current distance is numeric only. Proposed first
+- **Categorical similarity:** the current distance is numeric only. This first
   version requires categorical `match_vars` to remain in `stratify_vars`; reject
   attempts to exclude them rather than silently ignore them or invent a new
   categorical distance. Users can explicitly move a variable to monitoring.
-- **Score-only missingness:** proposed first version preserves missing-only-matches-
+- **Score-only missingness:** this first version preserves missing-only-matches-
   missing for all numeric matching features, including score-only features. Their
   missingness flags remain hard constraints, never distance inputs. The report
   must explain that varied missingness patterns can still fragment strata. A
@@ -414,7 +427,7 @@ contract.
 
 ### 4.4 Downsampling: public contract and proportional allocation
 
-**Proposed API (not yet available):**
+**Implemented API:**
 
 ```python
 from rapidmatch import random_downsample
@@ -422,9 +435,12 @@ from rapidmatch import random_downsample
 result = random_downsample(
     data="training_data.parquet",
     sample_size=25_000,  # User chooses this; there is no fixed output size.
+    label_col="Y",      # Optional: infer and preserve observed class proportions.
     stratify_vars=["region", "age", "income"],
     check_vars=["tenure", "spend", "visits"],
     n_bins=4,
+    ks_threshold=0.05,
+    js_threshold=0.10,
     random_state=42,
 )
 
@@ -437,48 +453,161 @@ report = result.report
   errors. `sample_size == N` returns every source row once.
 - No treatment column, target/reference split, or pairwise distance scoring is
   needed. The full user-supplied dataset is the reference population.
+- `label_col=None` is the default. If supplied, the user names the classification
+  label column explicitly; validate that it exists, and never guess the outcome
+  from a column name or infer a classification task from a numeric dtype alone.
+  Binary and multiclass labels are categorical for allocation, including labels
+  stored as numeric codes. `n_bins` never bins a classification label.
 - Accept the existing supported input kinds through `UniversalDataLoader`. Reuse
   session ownership/cleanup; treat the vendored loader as an upstream dependency.
-- Proposed defaults: `stratify_vars=()` and `check_vars=()`. With no grouping
-  variables, the single population stratum gives simple random sampling without
-  replacement. With grouping variables, proportional stratified sampling applies.
-- Form numeric bin edges from the **whole population**, treating missing grouping
-  values as explicit groups. Preserve source values in the returned sample rather
-  than exposing imputation, bin columns, or a synthetic treatment flag.
-- Check grouping variables plus additional `check_vars` against the full population.
-  Checks are reporting-only: do not invoke matching's drift trimming or silently
-  shrink the sample to satisfy a quality threshold.
+- Defaults: `stratify_vars=()` and `check_vars=()`. With neither a label
+  column nor grouping variables, the single population stratum gives simple random
+  sampling without replacement. With only `label_col`, allocate by class and sample
+  randomly within each class. With feature grouping, use the allocation below.
+- Form numeric feature bin edges from the **whole population**, treating missing
+  grouping values as explicit groups. Use the same population-derived feature
+  edges across classes when `label_col` is present; within-class allocation does
+  not imply class-specific bin edges. Use unambiguous group identities so literal
+  category values cannot collide with separators or missing-value markers.
+  Preserve ingested source values in the returned sample rather than exposing
+  imputation, bin columns, or a synthetic treatment flag.
+- Check the label distribution when supplied, grouping variables, and additional
+  `check_vars` against the full population. These checks assess quality without
+  modifying the sample: do not invoke matching's drift trimming, change class
+  budgets, or silently shrink the sample to satisfy a threshold. Return an
+  explicit feature-balance acceptance outcome as defined in §4.5.
 
-**Allocation proposal for review:** for requested size `m` and stratum sizes `N_s`,
-set ideal quotas `q_s = m * N_s / N`. Start with `floor(q_s)` and give the remaining
-slots to the largest fractional remainders. Resolve equal remainders reproducibly
-using the seed and stable stratum identity. Select each quota uniformly at random
-within its stratum without replacement. Use exact/wide arithmetic for allocation
-so numerical rounding cannot change the total. Verify `sum(quota_s) == m` and
-`0 <= quota_s <= N_s` before selection.
+**Output contract:** a completed sampling run always returns exactly the requested
+number of unique source rows and, when `label_col` is supplied, exactly the rounded
+class budgets. Violations of those counts are implementation errors, not quality
+warnings. Calling the sample sufficiently representative additionally requires the
+feature-balance checks to pass for the declared evaluation scope. A correctly sized
+sample can fail those checks and must be reported as such. Arbitrary sample sizes
+cannot guarantee zero distributional divergence across every feature.
+
+**Approved allocation hierarchy:**
+
+1. **Without `label_col`:** for requested size `m` and stratum sizes `N_s`, use
+   ideal quotas `q_s = m * N_s / N` across the full population's feature strata.
+2. **With `label_col`, outer allocation:** for each observed class `y` with `N_y`
+   rows, use ideal class quota `q_y = m * N_y / N`. Round to integer class budgets
+   `m_y` whose total is exactly `m`. The user supplies no class-ratio parameter.
+3. **With `label_col`, inner allocation:** inside class `y`, for each feature
+   stratum with `N_(y,s)` rows, use ideal quota
+   `q_(y,s) = m_y * N_(y,s) / N_y`. Round within that class so its quotas sum to
+   exactly `m_y`. A class allocated zero rows contributes no selected rows.
+4. Select each allocated quota uniformly at random without replacement from its
+   source group. Inner allocation, selection, and diagnostics never transfer slots
+   between classes or change the outer class budgets.
+
+**Implemented rounding:** at each allocation level, start with the floor
+of each ideal quota and distribute the remaining slots by largest fractional
+remainder. Resolve ties reproducibly using the seed and stable group identity.
+Use exact/wide arithmetic so numerical rounding cannot change totals. Verify
+`sum(m_y) == m` when a label is supplied, each class's inner quotas sum to `m_y`,
+all selected quotas sum to `m`, and no group quota exceeds its available rows.
+
+For example, a population with 900,000 `Y=0` rows and 100,000 `Y=1` rows has a
+90:10 ratio. Requesting 10,000 rows allocates 9,000 to class `0` and 1,000 to class
+`1`, followed by proportional feature-stratum allocation within each class.
+When exact proportions are not integer-feasible, report the rounded class counts
+and resulting shares while preserving the exact requested total.
+
+This outer allocation is intentional: independently rounding all composite
+`label × feature-stratum` quotas in a single pass can unnecessarily distort class
+totals. Changing feature bins may alter within-class allocation but must not change
+class budgets for the same source, requested size, and seed.
+
+The Y-proportion requirement applies to the **overall output**, not to every
+feature stratum. Do not force each region/age/income group to share the population's
+overall Y ratio. Conditional proportional allocation is a mechanism for feature
+representation; exact feature-stratum proportions are not an additional output
+guarantee beyond the specified integer allocation rules.
+
+**Meaning of the label:** `label_col` is the ML prediction outcome, not
+`ControlMatcher`'s treatment flag. Preserve its observed imbalance by default;
+50:50 balancing, custom class ratios, and class oversampling require a separate
+explicit allocation policy and are outside this increment. A continuous regression
+outcome belongs in numeric `stratify_vars` for population-derived quantile binning
+or in `check_vars` for diagnostics, not in categorical `label_col`.
+
+**Implemented label edge policies:** handle missing labels as an explicit
+unlabeled group, include them in the population denominator, and report their
+share; never silently discard rows or shrink the reference population. If the
+label is also listed in `stratify_vars` or `check_vars`, normalize that redundant
+reference so it is handled once as an outer categorical group and reported once.
 
 Establish stable source-row identity once; select on row identity rather than
 business-id uniqueness or row values. Identical-valued source rows remain distinct
-eligible records. A fixed seed and fixed input/order must reproduce selection;
-the implementation review must settle the identity and seeded-ranking mechanism,
-including its reproducibility scope across thread counts and library versions.
+eligible records. A fixed seed and fixed ingested input/order reproduce selection
+independently of DuckDB thread count. Identity is materialized in a serial scan;
+MD5 priorities and row-id tie-breaks determine selection. Reproducibility across
+library versions or reordered sources is not guaranteed. The actual seed is
+recorded even when the caller leaves `random_state=None`.
 
 **Size versus representation:** exact size is guaranteed on successful return;
 exact joint-distribution preservation across all features is not. Some tiny strata
 can receive zero slots from proportional rounding, even when `m` exceeds the
-number of strata. If there are 800 nonempty strata and only 500 requested rows,
-representing every stratum is impossible. Report omitted strata and their total
-population share while still returning exactly 500 rows. Forcing one row per
-stratum or oversampling rare groups is a different allocation policy and is not
-part of this default.
+number of strata. Likewise, a rare class may receive zero rows when its proportional
+quota rounds to zero; class representation is not guaranteed for every requested
+size. If there are 800 nonempty strata and only 500 requested rows, representing
+every stratum is impossible. Report omitted classes/strata and their population
+shares while still returning exactly 500 rows. Forcing one row per class/stratum
+or oversampling rare groups is a different allocation policy and is not part of
+this default.
 
-### 4.5 Downsampling: diagnostics, guidance, and memory behavior
+### 4.5 Downsampling: feature-balance acceptance, guidance, and memory behavior
 
-The proposed report includes:
+**Approved quality criterion:** compare the generated sample's feature
+distributions with those of the **full supplied population**, using configurable
+thresholds with initial defaults:
+
+| Feature kind | Metric | Pass condition |
+|---|---|---|
+| Numeric | KS statistic | `KS <= ks_threshold`, default `0.05` |
+| Categorical | JS divergence (natural log) | `JS <= js_threshold`, default `0.10` |
+
+These are distribution-difference tolerances, not significance-test p-values.
+Validate threshold inputs and record the values actually used. The evaluation
+scope is the deduplicated grouping features plus `check_vars`; the report must
+name the checked features and must not imply that unchecked features or all joint
+relationships have been verified. The label's rounded-count invariant is checked
+separately and cannot be replaced by a permissive JS threshold.
+
+Give each required feature check and the aggregate assessment an explicit
+`pass`/`fail`/`not_evaluated` outcome. The overall outcome is exposed at
+`result.report.summary['balance_status']`; detail rows carry `status` and `required`.
+Any failed required check means aggregate failure. If none fail but a required
+comparison is unavailable, or no feature checks were requested, the aggregate
+is not evaluated rather than passed. Acceptance requires all required comparisons
+in the declared scope to be available and within their thresholds.
+
+Support optional within-Y feature comparisons to expose class-specific differences
+that overall similarity can hide. Record whether these comparisons are enabled
+and included in the required acceptance scope. Compare each sampled class with
+that class in the full input, and explicitly mark unavailable comparisons such as
+a class with zero sampled rows.
+
+If balance fails, retain the exact requested sample size and class budgets,
+identify failing features with measured differences and thresholds, and provide
+actionable recommendations. Do not silently shrink the sample, change its class
+mix, relax thresholds, or describe it as having passed. A failed generated sample
+does not prove that no sample of the requested size could pass. Automatic retries
+or balance-optimizing replacement are not implied by this acceptance check and
+would need their own design.
+
+The implemented report includes:
 
 - Population count, requested/returned counts, seed, settings, and bin edges.
+- Count/class-budget invariant results, declared feature-check scope, thresholds,
+  per-feature outcomes, and an aggregate feature-balance acceptance outcome.
+- When `label_col` is supplied: observed class counts/shares, ideal and rounded
+  class budgets, actual sampled counts/shares, rounding deviations, and omitted
+  classes. Include the explicit unlabeled group under the implemented missing-label
+  policy. Evaluate label balance categorically even for numeric class codes.
 - Stratum population counts/shares, ideal and allocated sample quotas, selected
-  counts/shares, and zero-allocation groups.
+  counts/shares, and zero-allocation groups. With labels, identify each class and
+  show conditional within-class proportions as well as overall shares.
 - Full-population versus sample KS/JS diagnostics for grouping and check variables,
   including observation counts and missing rates. A comparison with no usable
   observations must be marked unavailable, not presented as evidence of balance.
@@ -487,38 +616,83 @@ The proposed report includes:
 - Actionable guidance: increase `sample_size` for better small-group representation,
   try fewer bins, or review optional grouping variables. These are suggestions;
   the user's count and constraints remain unchanged until the user changes them.
+  For failed feature checks, explain the measured discrepancy and suggest reviewing
+  relevant grouping features/bin settings or requesting a larger sample; distinguish
+  tested improvements from suggestions and recheck balance after a changed run.
+  If a rare class has a zero outer budget, explain that changing feature bins
+  cannot supply it rows; a different sample size or explicit allocation policy
+  would be required. Within-class guidance must respect the fixed class budgets.
 
 Keep profiling, full-population binning, stratum counts, allocation, selection,
 and full-population diagnostic work DuckDB-backed with spill-capable operations.
 Avoid a full source-table Arrow/pandas pull and all-pairs matching. Materialize
-only the selected rows and bounded report artifacts in Python; cap/summary large
+only the selected rows and bounded report artifacts in Python; summarize large
 stratum reports with an explicit indication that details are truncated. Compare
 candidate settings without simultaneously retaining copies of the population.
 The memory footprint still depends on the requested sample size, row width, and
 DuckDB operations; no blanket constant-memory claim is made.
 
-### 4.6 Implementation stages after plan review
+### 4.6 Completed implementation stages and verification
 
-- [ ] **Stage 1 — Capacity diagnostics and guidance.** Extend coverage/reporting,
+- [x] **Stage 1 — Capacity diagnostics and guidance.** Extend coverage/reporting,
       add the aggregate stratum warning and explicit preflight comparisons, and
       correct any global-shortage wording that suggests quality relaxation alone
       can overcome a total-row deficit.
-- [ ] **Stage 2 — Grouping/scoring separation.** Resolve the §4.3 policies and add
+- [x] **Stage 2 — Grouping/scoring separation.** Resolve the §4.3 policies and add
       the compatible config option; make preflight use the same preparation and
       grouping rules as matching.
-- [ ] **Stage 3 — Exact-size downsampling.** Add cohesive sampling configuration,
-      allocation, selection, and result/report modules following §3a. Share input,
-      SQL, and binning infrastructure where appropriate, with explicit reference
-      population selection. Export `random_downsample` and its result type.
-- [ ] **Stage 4 — Population diagnostics and sampling recommendations.** Implement
-      DuckDB-backed checks and sparse-group reporting without trimming output.
-- [ ] **Stage 5 — Verification and documentation.** Add meaningful regression and
+- [x] **Stage 3 — Exact-size downsampling.** Add cohesive sampling configuration,
+      allocation, selection, and result/report modules following §3a. Implement
+      optional categorical `label_col`, outer class budgets, and conditional
+      feature-stratum allocation. Share input, SQL, and binning infrastructure
+      where appropriate, with explicit reference population selection. Export
+      `random_downsample` and its result type.
+- [x] **Stage 4 — Population diagnostics and sampling recommendations.** Implement
+      DuckDB-backed checks, configurable balance thresholds, explicit acceptance
+      outcomes, optional within-label comparisons, class-proportion reports, and
+      actionable failure/sparse-group guidance. Preserve the exact sample size
+      and fixed class budgets.
+- [x] **Stage 5 — Verification and documentation.** Add meaningful regression and
       feature tests; update README, codegraph, working memory, and examples when
       the APIs are implemented. Record measured results and implementation status
       here. Run the relevant targeted tests, then `python3 -m pytest tests -q` and
       the existing `python3 demo.py` smoke run.
 
 **Acceptance checks:**
+
+**Stage 1–2 verification (2026-10-04):** 22 targeted coverage/config/pipeline/
+profile/binning/report tests passed. Added tests for local shortage with global
+surplus, 1:n ceilings, measured bin recommendations without scoring/pulling,
+bounded report detail, warning timing, unchanged legacy grouping results, and
+score-only numeric features with strict missingness constraints.
+
+**Stage 3–4 verification (2026-10-04):** 33 initial sampling checks passed, including
+hand-calculated KS/JS, exact class/feature quotas, label-first versus flat-rounding
+behavior, nullable/colliding-looking categories, deterministic selection across
+thread counts, and full-population/within-class acceptance. A 200,000-row Parquet
+case passed under a 128 MB DuckDB limit with an Arrow-boundary guard. Class/stratum/
+balance report tables are capped by `max_report_rows`; full aggregate outcomes are
+computed before truncation. Two additional cleanup/nonfinite regression checks
+also passed as part of the final suite.
+
+**Final verification (2026-10-04):** all 105 tests passed (64 existing + 41 new).
+`python3 demo.py` passed with 186/200 targets matched; its capacity warning correctly
+identified the 14-target structural shortfall. `python3 demo_downsample.py` returned
+exactly 1,000 rows with class counts 900/100 and `balance_status='pass'`, including
+within-label checks. `git diff --check` passed. Commands used the isolated Python
+environment recorded in §4.7. README, codegraph, working memory, and the new
+`demo_downsample.py` now describe the implemented APIs.
+
+**Documentation follow-up (complete, 2026-10-04):** user requested a complete ML
+walkthrough in README: use case, synthetic/file-backed training data, feature roles,
+class/feature acceptance, recommendation interpretation, explicit tuning, and
+training-data/report export. Added `demo_ml_downsample.py` as the runnable counterpart;
+verified it on a 100,000-row synthetic training population. The initial 1,000-row
+request returned 900/100 labels but failed three minority-class feature checks
+(income KS 0.0845, spend 0.0630, tenure 0.0745). An explicit 10,000-row request
+returned 9,000/1,000, passed all required comparisons, and exported Parquet training
+data and a JSON report. Artifacts were written under `/tmp/omnirush/ml-walkthrough`
+for verification. These are demonstrated results, not universal size recommendations.
 
 - Matching detects local shortages even with a global surplus; thin-but-sufficient,
   no-control, control-only strata, and 1:n assignment/target ceilings are distinct.
@@ -529,27 +703,62 @@ DuckDB operations; no blanket constant-memory claim is made.
 - Sampling returns the exact count for fractional quotas, many tiny groups,
   categorical-only/numeric-only/mixed grouping, no grouping, one requested row,
   and full-population requests. No source-row identity is selected twice.
+- Label-aware sampling preserves the observed binary/multiclass proportions to
+  the defined integer-rounding rule; numeric class codes are never feature-binned.
+  The 90:10 / 10,000-row example returns exactly 9,000 and 1,000 rows respectively.
+- Inner quotas sum exactly to each outer class budget. Changing the number or
+  granularity of feature strata cannot change the outer class counts for a fixed
+  source, sample size, and seed. Include a case where flat joint-stratum rounding
+  would disagree with the required label-first allocation.
+- Cover label-only sampling, missing/nonexistent label columns, single-class and
+  rare/zero-budget classes, redundant label references, and sampling without a
+  label. Validate/report edge cases according to the reviewed label policies.
 - Fixed seeds reproduce selection; duplicate-valued rows, tied quotas, constant
   features, null groups, unusual category values, and invalid inputs are covered.
 - Sampling bins and diagnostics use the full population. SQL KS/JS agree with
   small independently calculated examples; unavailable comparisons are explicit.
+- Feature-balance assessment covers passing, failing, exactly-at-threshold, and
+  unavailable comparisons, custom thresholds, and empty feature-check scope.
+  A failed assessment identifies the relevant features without changing the
+  requested row count, rounded class counts, or configured thresholds.
+- Optional within-label checks can expose a class-specific feature imbalance even
+  when the overall feature distribution passes. Aggregate outcomes respect the
+  declared required scope and never treat unavailable comparisons as passed.
 - Diagnostics never reduce sample size. Large-data checks confirm absence of a
   full-population Python materialization and pairwise candidate arrays; DuckDB
   resources/temp files are cleaned up on success and failure.
 
-### 4.7 Items to settle in the requested review
+### 4.7 Implementation decisions (2026-10-04)
 
-The approved contracts are exact user-selected size, proportional stratified
-random sampling by default, no treatment-column requirement for sampling, capacity
-warnings, and actionable guidance. Review these proposed implementation details
-before code changes:
+The build uses the reviewed compatibility proposal: optional `stratify_vars` is a
+subset of `match_vars`; categorical matching variables and all numeric matching
+missingness flags remain hard constraints. `ControlMatcher.assess` returns a
+`CapacityReport`, also available from `result.report.capacity`, with bounded detail
+tables and opt-in bin trials. Sampling uses largest-remainder quotas at both levels,
+an explicit missing-label group, and deduplicated label references. Optional
+`check_by_label` adds required within-class feature checks. Feature acceptance uses
+`pass`, `fail`, or `not_evaluated`, independently of exact count/class invariants.
+Sampling row identity is materialized once in a serial scan; seeded MD5 priorities
+with deterministic identity tie-breaks make later parallel operations independent
+of execution order. Reproducibility is promised for the same ingested input/order,
+seed, and library versions, not arbitrary file reorderings or version migrations.
 
-1. `stratify_vars` as a subset of existing `match_vars`, including categorical and
-   score-only missingness policies in §4.3.
-2. Public assessment/report names, optional trial controls, and bounded stratum
-   detail presentation.
-3. Largest-remainder quota rounding with seeded ties, source-row identity, and the
-   precise reproducibility guarantee for sampling.
+**Initial verification:** the unchanged suite passed: 64 tests using Python 3.14,
+DuckDB 1.5.6, PyArrow 25.0.1, NumPy 2.5.3, and pandas 3.0.6. A Linux test environment
+is isolated under `/tmp/omnirush/rapidmatch-venv`; the Windows environments are not
+used for these checks.
+
+Additional public choices: `DownsampleResult` exposes `sample`, `report`, and
+separate `row_ids`. `DownsampleReport` exposes `summary`, `classes`, `strata`,
+`balance`, `bin_edges`, `recommendations`, and `to_dict()`. `max_report_rows=1000`
+bounds each sampling detail table, with explicit truncation flags; aggregate
+counts/check outcomes always include all groups. Within-label checks are required
+when `check_by_label=True`. Class JS is descriptive and does not replace the exact
+rounded-count invariant. Reserved input prefix `_rs_` is rejected explicitly.
+Numeric missing/nonfinite values form a grouping category, are excluded from KS,
+and have separately reported missing rates. Guidance never silently changes data,
+thresholds, or requested counts. Automatic retry/optimization remains a future
+design rather than an implicit response to a failed feature check.
 
 ## 5. Pipeline diagram
 
@@ -637,6 +846,39 @@ deterministic, and easy to explain to a non-technical stakeholder.
     report the average match_strength lost alongside the balance gained.
 
 ## 8. Changelog
+
+- **End-to-end ML usage documented and verified (2026-10-04).** Expanded README
+  with a complete training-data walkthrough and added `demo_ml_downsample.py`:
+  generate/file-load, request exact rows with label-first quotas, interpret class
+  and feature reports, read recommendation evidence/trade-offs, explicitly revise
+  the request, and export an accepted sample/report. Recorded the observed
+  1,000-row failure and 10,000-row success for the seeded example in §4.6.
+
+- **Capacity guidance and label-aware downsampling built (2026-10-04).** Added
+  `CapacityReport`, `ControlMatcher.assess`, pre-scoring capacity warnings, measured
+  bin trials, compatible `stratify_vars`, and `random_downsample` with exact label-
+  first quotas. Full-population SQL KS/JS, optional within-label checks, bounded
+  reports, explicit acceptance, and recommendations are implemented. Ingestion
+  cleanup now also handles partial failures. All 105 tests and both demos passed;
+  complete stage results and runtime versions are recorded in §4.6–4.7.
+
+- **Downsample output and feature-balance acceptance clarified (2026-10-04).**
+  The agreed output has exactly the requested row count, the input's overall Y
+  proportions subject to integer rounding, and feature similarity verified against
+  configurable thresholds (initial KS `0.05`, JS divergence `0.10`). The same Y
+  ratio is not imposed inside every feature stratum. Added explicit acceptance
+  outcomes, failure guidance, and optional within-label checks to §4. A failing
+  sample remains correctly sized with its class budgets intact and is not reported
+  as sufficiently representative. Documentation only; code remains unimplemented.
+
+- **Label-first proportional downsampling refinement approved (2026-10-04).** Add
+  optional, explicitly named `label_col`; infer binary/multiclass proportions from
+  the supplied population rather than requesting a 1:0 ratio. Allocate the exact
+  requested sample to classes first, then to feature strata within each class,
+  preserving outer budgets through rounding and selection. Numeric class codes
+  are categorical; continuous regression outcomes use numeric feature binning.
+  Updated §4's API example, allocation contract, diagnostics, stages, and acceptance
+  checks. Documentation only; implementation remains pending plan review.
 
 - **Capacity guidance and exact-size downsampling planned (2026-10-04).** Approved
   direction: pre-scoring stratum-capacity warnings, evidence-based configuration

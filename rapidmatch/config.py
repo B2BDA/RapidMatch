@@ -50,6 +50,9 @@ class MatchConfig:
         verbose: Print timestamped stage lines to stderr (config, stratum
             counts, RSS, elapsed time, live assigned-control count). Independent
             of `progress`. Default False.
+        stratify_vars: Optional subset of match_vars used for hard grouping.
+            None preserves the historical grouping. All numeric match_vars still
+            score distance; categorical match_vars must remain in this subset.
     """
 
     match_vars: Sequence[str]
@@ -69,13 +72,20 @@ class MatchConfig:
     duckdb_threads: Optional[int] = None
     progress: bool = False
     verbose: bool = False
+    stratify_vars: Optional[Sequence[str]] = None
 
     def __post_init__(self) -> None:
         # Frozen dataclass: tuples/dicts so callers cannot mutate after construct.
         object.__setattr__(self, "match_vars", tuple(self.match_vars))
         object.__setattr__(self, "monitor_vars", tuple(self.monitor_vars))
         object.__setattr__(self, "weights", dict(self.weights))
+        if self.stratify_vars is not None:
+            object.__setattr__(self, "stratify_vars", tuple(self.stratify_vars))
         _validate(self)
+
+    @property
+    def grouping_vars(self) -> tuple[str, ...]:
+        return tuple(self.match_vars if self.stratify_vars is None else self.stratify_vars)
 
     def weight_for(self, var: str) -> float:
         """Weight used in distance scoring. Unspecified vars count as 1."""
@@ -88,6 +98,10 @@ def _validate(cfg: MatchConfig) -> None:
         raise ValueError("match_vars must be a non-empty sequence")
     if len(set(cfg.match_vars)) != len(cfg.match_vars):
         raise ValueError("match_vars contains duplicates")
+    if len(set(cfg.grouping_vars)) != len(cfg.grouping_vars):
+        raise ValueError("stratify_vars contains duplicates")
+    if not set(cfg.grouping_vars) <= set(cfg.match_vars):
+        raise ValueError("stratify_vars must be a subset of match_vars")
     if len(set(cfg.monitor_vars)) != len(cfg.monitor_vars):
         raise ValueError("monitor_vars contains duplicates")
     overlap = set(cfg.match_vars) & set(cfg.monitor_vars)

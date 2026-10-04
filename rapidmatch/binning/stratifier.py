@@ -26,13 +26,14 @@ class Stratifier:
         categorical_vars: Sequence[str],
         source: str = "v_prepared",
         dest: str = "v_stratified",
+        missing_vars: Sequence[str] | None = None,
     ) -> list[StratumCount]:
         self.edges = compute_bin_edges(con, numeric_vars, self.n_bins, source=source)
         bucket_parts = [
             bucket_sql(var, self.edges[var], self.n_bins) for var in numeric_vars
         ]
         inner_select = ", ".join(["*", *bucket_parts]) if bucket_parts else "*"
-        key_sql = stratum_key_sql(numeric_vars, categorical_vars)
+        key_sql = stratum_key_sql(numeric_vars, categorical_vars, missing_vars)
         con.execute(
             f"""
             CREATE OR REPLACE VIEW {dest} AS

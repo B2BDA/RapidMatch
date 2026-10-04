@@ -40,12 +40,12 @@ class MatchSession:
     def close(self) -> None:
         if self._closed:
             return
-        self.con.close()
-        if not self.keep_db:
-            for path in (self.db_path, self.db_path + ".wal"):
-                if os.path.exists(path):
-                    os.remove(path)
-        self._closed = True
+        try:
+            self.con.close()
+        finally:
+            if not self.keep_db:
+                _remove_database(self.db_path)
+            self._closed = True
 
     def __enter__(self) -> "MatchSession":
         return self
@@ -70,16 +70,32 @@ def ingest(
     object). Excel is the exception: `.load()` into Arrow, stream, then `del`.
     """
     db_path = _resolve_db_path(work_dir)
-    _stream(data, db_path)
-    con = duckdb.connect(db_path)
-    # Stable integer id used by scoring/matching. ROW_NUMBER is 1-based.
-    con.execute(
-        """
-        CREATE OR REPLACE VIEW v_source AS
-        SELECT ROW_NUMBER() OVER () AS _rm_id, * FROM udl_data
-        """
-    )
+    con = None
+    try:
+        _stream(data, db_path)
+        con = duckdb.connect(db_path)
+        # ROW_NUMBER is 1-based. Sampling pins its own identity in a table.
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW v_source AS
+            SELECT ROW_NUMBER() OVER () AS _rm_id, * FROM udl_data
+            """
+        )
+    except Exception:
+        try:
+            if con is not None:
+                con.close()
+        finally:
+            if not keep_db:
+                _remove_database(db_path)
+        raise
     return MatchSession(db_path=db_path, con=con, keep_db=keep_db)
+
+
+def _remove_database(path: str) -> None:
+    for filename in (path, path + ".wal"):
+        if os.path.exists(filename):
+            os.remove(filename)
 
 
 def _resolve_db_path(work_dir: Optional[str]) -> str:

@@ -5,6 +5,8 @@ Package import: `rapidmatch`. Pronunciation: "rematch".
 Python >= 3.11. Compute: DuckDB (prep) then NumPy on a PyArrow pull (score/match). No ML, no PySpark, no sklearn.
 
 Maps to read first: `codegraph.md` (running code), `plan.md` (locked design). Modules 1-13 are built. Module 14 (FastAPI) is not.
+Capacity preflight, separate grouping/scoring roles, and label-aware exact-size
+downsampling are also built; see codegraph §12 and plan §4.
 
 ## What it does
 
@@ -33,6 +35,25 @@ result = ControlMatcher(MatchConfig(
 Exports (`rapidmatch/__init__.py`): `ControlMatcher`, `MatchConfig`, `MatchResult`, `Report`.
 
 Entry: `ControlMatcher.fit_match` in `rapidmatch/pipeline.py`.
+
+`ControlMatcher.assess(data, n_bins_candidates=[4, 3, 2])` performs count-only
+preflight and returns `CapacityReport`. Matching attaches the baseline report at
+`result.report.capacity` and warns before scoring about local shortages. Thin
+pool and insufficient capacity are independent. `MatchConfig.stratify_vars` can
+limit numeric hard grouping while all numeric match vars still score; categorical
+match vars and numeric missingness flags remain hard constraints.
+
+`random_downsample(data, sample_size=..., label_col="Y", stratify_vars=[...],
+check_vars=[...], random_state=42, check_by_label=True)` returns `DownsampleResult`
+with `sample`, `report`, and separate internal `row_ids`. No treatment flag is
+required. Allocate rounded class quotas first, then feature-stratum quotas within
+each class; exact size and class budgets must survive all quality checks. Sample
+edges come from the full input, unlike matching's target-only edges. SQL KS/JS
+stay DuckDB-backed; `report.summary['balance_status']` is pass/fail/not_evaluated.
+Defaults: KS .05, natural-log JS divergence .10. Missing labels form a group;
+numeric class codes are categorical. `check_by_label` adds required conditional
+feature checks. `max_report_rows` bounds detail, never aggregate acceptance.
+Failed feature checks do not trim, retry, change class budgets, or relax thresholds.
 
 ## Pipeline (`ControlMatcher._run`)
 
@@ -103,6 +124,7 @@ rapidmatch/
   balance/              JS/KS checker
   drift/                diagnose + trim-only correct
   reporting/            coverage / balance / drift_log / profile
+  sampling/             config / prepare / allocate / SQL balance / report / sampler
 tests/                  1:1 with step files
 ```
 
@@ -112,7 +134,8 @@ tests/                  1:1 with step files
 
 1. No control row reused.
 2. Strength in `(0, 1]`.
-3. Bin edges and z-moments from target group only, never per stratum.
+3. Matching bin edges and z-moments from target group only, never per stratum.
+   Downsampling bins use the full supplied population.
 4. Every target in `result.targets`.
 5. Missing flags stratify only, not distance.
 6. pandas is not used for computation.
@@ -125,6 +148,7 @@ tests/                  1:1 with step files
 ```
 python3 -m pytest tests -q
 python3 demo.py
+python3 demo_downsample.py
 ```
 
 Do not add FastAPI, PySpark, or sklearn.

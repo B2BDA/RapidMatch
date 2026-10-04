@@ -16,13 +16,14 @@ from rapidmatch.missingness.handle_missing import missing_flag_name
 def stratum_key_sql(
     numeric_vars: Sequence[str],
     categorical_vars: Sequence[str],
+    missing_vars: Sequence[str] | None = None,
 ) -> str:
     parts: list[str] = []
     for var in numeric_vars:
         parts.append(f"CAST({quote_ident(bin_column_name(var))} AS VARCHAR)")
     for var in categorical_vars:
         parts.append(quote_ident(var))
-    for var in numeric_vars:
+    for var in numeric_vars if missing_vars is None else missing_vars:
         parts.append(f"CAST({quote_ident(missing_flag_name(var))} AS VARCHAR)")
     if not parts:
         return "CAST('all' AS VARCHAR) AS _stratum"

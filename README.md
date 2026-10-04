@@ -1,12 +1,16 @@
 # RapidMatch (RiMatch)
 
-**Explainable treatment/control group matching.**
+**Explainable treatment/control matching and representative downsampling.**
 
 RapidMatch (RiMatch, pronounced "rematch") is a Python library that builds a
 **control group** from the untreated rows (`0`) of a dataset so its pre-campaign
 feature distribution closely mirrors the treated rows (`1`). It is designed for
 measuring the real impact of a campaign isolated from pre-existing differences
 between who was targeted and who wasn't.
+
+For ML datasets, `random_downsample` selects an exact user-requested number of
+rows, optionally preserving the observed Y-class proportions, and verifies
+feature similarity against the full input population.
 
 Fully **rule-based and explainable** end to end — no ML, no black boxes.
 
@@ -59,8 +63,9 @@ pip install "rapidmatch[notebook]"  # notebook representation plots (matplotlib)
 
 > **pandas is optional.** It is only used to *build* the input or to consume
 > an output via `table.to_pandas()`. All matching, transformation, and scoring
-> runs on DuckDB + PyArrow + NumPy, so multi-million-row inputs stay
-> memory-safe and pandas never materializes an intermediate copy.
+> runs on DuckDB + PyArrow + NumPy without intermediate pandas copies. Matching
+> memory depends on candidate-pair volume; use the capacity preflight and candidate
+> cap when needed. Downsampling keeps full-population operations inside DuckDB.
 
 ## Quick Start
 
@@ -111,6 +116,384 @@ back onto your input to get the actual control rows.
 | `target_id` / `control_id` | Your `id_col` if you set one; otherwise RapidMatch's internal `_rm_id` |
 | `target_rm_id` / `control_rm_id` | Always the internal 1-based row number (`ROW_NUMBER()` at ingest). Use this only if you kept the DuckDB file (`keep_db=True`) and join on `_rm_id`. |
 
+
+## Exact-size ML downsampling
+
+```python
+from rapidmatch import random_downsample
+
+result = random_downsample(
+    data="training_data.parquet",  # also accepts a pandas DataFrame or Arrow Table
+    sample_size=25_000,             # exact row count, without replacement
+    label_col="Y",                 # optional; class proportions inferred from input
+    stratify_vars=["region", "age", "income"],
+    check_vars=["tenure", "spend"],
+    n_bins=4,
+    random_state=42,
+    ks_threshold=0.05,
+    js_threshold=0.10,
+    check_by_label=True,            # also require feature balance within each class
+)
+
+sample = result.sample              # original ingested columns, PyArrow Table
+print(result.report.summary["balance_status"])  # pass / fail / not_evaluated
+print(result.report.classes.to_pylist())
+print(result.report.balance.to_pylist())
+print(result.report.recommendations)
+```
+
+No treatment column or artificial 1/0 split is needed. `label_col` names the
+classification outcome, not a campaign-treatment flag. A 90:10 population sampled
+to 10,000 rows gets 9,000 and 1,000 rows respectively. Integer class quotas are
+allocated first by largest remainder, then allocated across feature strata within
+each class. Random selection fills those quotas without reusing a source row.
+The overall Y ratio is **not** forced into every feature stratum.
+
+Numeric feature bins come from the **whole population**. Classification labels
+are categorical even if stored as numbers. Missing labels form an explicit group;
+the report uses JSON-encoded class values (for example `[0.0]` or `[null]`). A
+continuous regression outcome can instead be a numeric grouping/check variable.
+Missing/nonfinite numeric grouping values form an explicit group; finite values
+are used for numeric distribution statistics, with missing rates reported separately.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `sample_size` | required | Positive integer at most the population count; requesting the whole population returns all rows |
+| `label_col` | `None` | Optional categorical outcome whose observed proportions are preserved, up to integer rounding |
+| `stratify_vars` | `()` | Feature groups receiving proportional quotas; selected numeric variables are binned |
+| `check_vars` | `()` | Additional features to check; grouping features are always checked |
+| `n_bins` | `4` | Whole-population numeric quantile bins, at least two |
+| `random_state` | `None` | Nonnegative integer seed below `2**63`; an omitted seed is generated and recorded in the summary |
+| `ks_threshold` / `js_threshold` | `0.05` / `0.10` | Numeric KS and categorical natural-log JS divergence thresholds |
+| `check_by_label` | `False` | Add required within-class feature checks; requires `label_col` |
+| `duckdb_threads` | `None` | DuckDB execution threads; identity is established serially before parallel operations |
+| `max_report_rows` | `1000` | Maximum rows in each class/stratum/balance detail table; summary totals and acceptance include all rows |
+| `work_dir` / `keep_db` | `None` / `False` | Temporary DuckDB location and optional retention, as in matching |
+
+With no label or grouping features, selection is simple random sampling. With a
+label only, selection is random within each allocated class. A fixed seed gives
+the same selected rows for the same ingested data/order and library versions,
+independent of `duckdb_threads`. Duplicate-valued input records are distinct source
+rows; `result.row_ids` exposes their internal identities separately from the sample.
+Input columns beginning with `_rs_` are reserved and rejected.
+
+**Representation is checked, not assumed.** A feature passes at KS ≤ its numeric
+threshold or JS divergence ≤ its categorical threshold. JS uses natural logarithms,
+not the square-root distance (range 0 to ln(2)). These tolerances are not p-values.
+Any failed required feature yields `balance_status="fail"`. If no checks were
+requested or a required comparison is unavailable, the outcome is `not_evaluated`
+unless another check failed. Label-count invariants are checked separately from
+feature acceptance. Passing applies to the declared features/scopes, not every
+unmeasured joint relationship.
+
+The sample always retains its requested size and rounded class budgets, even when
+balance fails. Inspect failed features and recommendations; settings and thresholds
+are never silently changed. Very small samples can omit rare classes or feature
+groups. The report includes omitted population shares and detail-truncation flags.
+Full-population grouping, selection, and exact KS/JS stay in DuckDB; only the
+selected rows and bounded reports are pulled into Python. Output memory still
+depends on the selected row count and width.
+
+Runnable example: `python3 demo_downsample.py`.
+
+### End-to-end example: a memory-constrained ML training dataset
+
+**Use case:** you have a large training dataset and want a smaller dataset that fits
+your model's memory budget. Its classification label `Y` is imbalanced (90% class 0,
+10% class 1). You want the requested row count, that same overall label mix, and
+feature distributions close to the full training population—not just matching
+label counts.
+
+Use RapidMatch on the **training partition** after establishing your train/
+validation/test split. The supplied training partition is the reference population
+for class proportions, bins, and balance checks. Evaluate the model on your held-out
+data. For real datasets, pass a file path so the library can operate through DuckDB
+instead of first constructing a full pandas DataFrame.
+
+The complete runnable walkthrough is [`demo_ml_downsample.py`](demo_ml_downsample.py):
+
+```bash
+# Run in the project environment after installation.
+python demo_ml_downsample.py
+# Or choose the output directory:
+python demo_ml_downsample.py /path/to/demo-output
+```
+
+It generates 100,000 synthetic training rows, writes a Parquet input, evaluates an
+initial 1,000-row candidate, demonstrates an explicit larger request when needed,
+and exports the accepted training sample plus a JSON report. You can also follow
+the steps below sequentially in a notebook.
+
+#### 1. Prepare the training population
+
+This small synthetic population makes the example self-contained. For your actual
+ML use case, start with your existing training file and skip generation.
+
+```python
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+rng = np.random.default_rng(42)
+n = 100_000
+y = np.array([0] * 90_000 + [1] * 10_000)
+rng.shuffle(y)
+
+population = pa.table({
+    "customer_id": np.arange(n),
+    "Y": y,
+    "region": rng.choice(["north", "south", "west"], n, p=[0.5, 0.3, 0.2]),
+    "age": np.clip(rng.normal(40 + 5 * y, 12, n), 18, 80),
+    "income": rng.lognormal(10.5 + 0.2 * y, 0.45, n),
+    "tenure": rng.integers(0, 15, n),
+    "spend": rng.gamma(2.0 + y, 300, n),
+})
+input_path = "training_population.parquet"
+pq.write_table(population, input_path)
+del population
+```
+
+#### 2. Request a sample and choose feature roles
+
+```python
+from rapidmatch import random_downsample
+
+settings = dict(
+    sample_size=1_000,
+    label_col="Y",
+    stratify_vars=["region", "age", "income"],
+    check_vars=["tenure", "spend"],
+    n_bins=4,
+    random_state=42,
+    ks_threshold=0.05,
+    js_threshold=0.10,
+    check_by_label=True,
+)
+result = random_downsample(input_path, **settings)
+```
+
+- **`sample_size`:** the exact number of rows you can afford to train on. Here the
+  class budgets are 900 and 100; a subsequent request for 10,000 rows gets 9,000 and
+  1,000. RapidMatch calculates these counts from the input.
+- **`label_col`:** the ML label to preserve. No manual class ratio is required.
+- **`stratify_vars`:** a manageable set of important features whose groups receive
+  proportional slots. Numeric features get quantile bins; categories remain exact.
+  Putting all 100+ features here can fragment the data into tiny groups.
+- **`check_vars`:** additional features to verify without creating more strata.
+  Include the remaining features whose representation matters. Grouping features
+  are already checked, and unrelated identifiers should not be grouping features.
+- **`check_by_label=True`:** require similarity both overall and within each Y class.
+  This catches differences that can cancel out in the overall distribution.
+
+Every original ingested column is retained in `result.sample`, including columns
+you did not select for grouping or checking. Only the declared feature-check scope
+is assessed for similarity.
+
+#### 3. Inspect the size, class allocation, and acceptance outcome
+
+```python
+summary = result.report.summary
+print("Requested / returned:", summary["requested_rows"], summary["sampled_rows"])
+print("Exact count checks passed:", summary["count_invariants_passed"])
+print("Class budgets passed:", summary["class_budgets_passed"])
+print("Feature acceptance:", summary["balance_status"])
+print("Failed / unavailable checks:",
+      summary["checks_failed"], summary["checks_not_evaluated"])
+print(result.report.classes.to_pylist())
+```
+
+The class table contains `population_share`, `ideal_quota`, `allocated_rows`,
+`sampled_rows`, `sample_share`, and `rounding_deviation`. Compare **overall** Y
+proportions here; feature strata need not each have the same Y ratio.
+
+| `balance_status` | Interpretation |
+|---|---|
+| `pass` | Every required feature comparison in the declared scope was available and within its threshold |
+| `fail` | At least one required comparison exceeded its threshold; exact row count and class budgets still hold |
+| `not_evaluated` | No feature comparisons were requested, or a required comparison was unavailable and none failed |
+
+`class_budgets_passed=True` alone does not establish representative features. For
+example, a 1,000-row sample can have exactly 900/100 labels but too few minority
+rows to track the minority's spending distribution closely.
+
+#### 4. Find which feature distributions differ
+
+```python
+import pyarrow.compute as pc
+
+balance = result.report.balance
+issues = balance.filter(
+    pc.and_(balance["required"], pc.not_equal(balance["status"], "pass"))
+)
+print(issues.select([
+    "variable", "scope", "label", "kind", "statistic", "threshold",
+    "n_population", "n_sample", "status",
+]).to_pylist())
+
+print("Omitted feature groups:", summary["omitted_strata"])
+print("Population share in omitted groups:", summary["omitted_stratum_population_share"])
+print("Detail tables truncated:", summary["classes_truncated"],
+      summary["strata_truncated"], summary["balance_truncated"])
+```
+
+Read a feature-check row as follows:
+
+- `scope="overall"` compares the full training population with the whole sample.
+- `scope="within_label"` compares a class in the original population with its
+  sampled rows; `label` identifies that class.
+- `kind="ks"` measures the largest cumulative-distribution gap for a numeric
+  feature. `kind="js"` measures categorical share divergence.
+- `statistic <= threshold` passes. For example, a KS of `0.08` fails a `0.05`
+  threshold; it is not an 8% p-value.
+- `not_evaluated` can mean no finite numeric observations or no sampled rows in
+  that class. Missing rates and valid-observation counts are also available.
+
+Detail tables are bounded by `max_report_rows`. The aggregate assessment includes
+**all** checks, even when some detail rows are omitted. Increase this limit if you
+need more detail and have room to display it. `report.strata` shows the allocated
+and selected rows and conditional proportions behind feature grouping.
+
+#### 5. Read recommendations and decide what to change
+
+```python
+for recommendation in result.report.recommendations:
+    print("Setting:", recommendation["setting"])
+    print("Suggested value:", recommendation["proposed_value"])
+    print("Why:", recommendation["reason"])
+    print("Evidence:", recommendation["evidence"])
+    print("Trade-off:", recommendation["tradeoff"])
+```
+
+`proposed_value=None` means review that setting using the evidence; it does **not**
+mean assign Python `None` to the parameter. Some choices require your domain
+knowledge or memory budget. An empty recommendation list is valid.
+
+| Evidence | How to interpret it |
+|---|---|
+| `measured_allocation` | Actual class/stratum quotas exposed an omission; a larger sample may help, but a new size has not been tested automatically |
+| `measured_balance` | Actual feature checks failed or were unavailable; inspect those rows before deciding how to change grouping or sample size |
+| `untested_suggestion` | A proposed configuration, such as fewer bins, still needs a new run and balance verification |
+| `measured_preflight` | Used by **control matching's** `assess(...)`: alternative bins were counted, giving measured capacity/work, not verified feature balance |
+
+Typical actions:
+
+| Observed issue | Possible user-selected action | Trade-off |
+|---|---|---|
+| A rare Y class receives zero rows | Request a larger `sample_size` if the budget allows | More output/model memory; changing feature bins cannot change that class's outer quota |
+| Many feature groups receive no rows | Try fewer bins or a smaller grouping set | Less fragmentation, but weaker control of feature detail; rerun checks |
+| A checked feature fails | Consider including it in `stratify_vars`, revisiting grouping, or requesting more rows | Adding a feature can create sparse groups; improvement is not guaranteed |
+| Within-class checks fail while overall checks pass | Inspect that class's features and sample count | Overall similarity alone is insufficient for the declared within-class requirement |
+
+Recommendations are evidence and suggestions, not automatic changes. A failed
+candidate does not prove that no representative sample of that size exists. The
+library does not silently retry, change your requested size, alter class budgets,
+or relax thresholds to manufacture a pass.
+
+#### 6. Explicitly choose and evaluate a revised request
+
+For this walkthrough, assume you inspect the initial result and decide the memory
+budget allows **10,000 rows** if the 1,000-row candidate does not pass. This is an
+explicit caller decision; the library still returns exactly the size passed on
+each call.
+
+```python
+if result.report.summary["balance_status"] != "pass":
+    revised_settings = {**settings, "sample_size": 10_000}
+    revised = random_downsample(input_path, **revised_settings)
+
+    for name, candidate in [("initial", result), ("revised", revised)]:
+        s = candidate.report.summary
+        print(name, s["sampled_rows"], s["balance_status"], s["checks_failed"])
+
+    result = revised
+```
+
+In the verified seeded walkthrough (using the versions recorded in
+[`docs/plan.md`](docs/plan.md)), the results were:
+
+| Request | Returned rows | Class 0 / class 1 | Required feature checks | Omitted feature groups |
+|---|---:|---:|---|---:|
+| Initial | 1,000 | 900 / 100 | Failed 3 within-minority-class checks | 2 |
+| Explicit larger request | 10,000 | 9,000 / 1,000 | All passed | 0 |
+
+The initial minority-class KS values were approximately `0.0845` for income,
+`0.0630` for spend, and `0.0745` for tenure, each above `0.05`. This illustrates why
+correct Y proportions alone are insufficient. Both calls returned their exact
+requested sizes; the second used the explicitly increased budget and reduced the
+training population's row count tenfold. Your dataset can produce different
+outcomes, and reproducibility across library versions is not guaranteed.
+
+You can similarly test a different `n_bins` or grouping set while keeping
+`sample_size` fixed. Reinspect the feature checks after every change. A larger
+sample or different grouping is not itself proof of acceptable balance.
+
+#### 7. Export the report and the accepted training sample
+
+```python
+import json
+from pathlib import Path
+
+Path("training_sample.report.json").write_text(
+    json.dumps(result.report.to_dict(), indent=2), encoding="utf-8"
+)
+
+if result.report.summary["balance_status"] == "pass":
+    pq.write_table(result.sample, "training_sample.parquet")
+
+    # Supply these to your model-training workflow.
+    X_train = result.sample.drop(["customer_id", "Y"])
+    y_train = result.sample["Y"]
+    print("Training shape:", X_train.num_rows, X_train.num_columns)
+else:
+    print("Review the saved report before accepting this sample for training.")
+```
+
+The example exports training data only after the declared checks pass, but a failed
+candidate remains accessible through `result.sample` for inspection. The JSON
+report records settings, seed, class/stratum allocations, acceptance outcomes, and
+recommendations. The Arrow sample can be converted with `.to_pandas()` if your
+training workflow needs pandas; only the chosen sample is converted.
+
+## Matching capacity and high-dimensional grouping
+
+```python
+from rapidmatch import ControlMatcher, MatchConfig
+
+matcher = ControlMatcher(MatchConfig(
+    match_vars=["region", "age", "income", "tenure"],
+    stratify_vars=["region", "age"],  # fewer hard constraints
+    treatment_col="is_target",
+    n_bins=4,
+))
+capacity = matcher.assess("campaign.parquet", n_bins_candidates=[4, 3, 2])
+print(capacity.summary)
+print(capacity.trials.to_pylist())
+print(capacity.recommendations)
+
+result = matcher.fit_match("campaign.parquet")
+print(result.report.capacity.summary)
+```
+
+All numeric `match_vars` still contribute to distance. Categorical matching
+variables must remain in `stratify_vars`, and numeric missingness flags remain hard
+constraints even for score-only features. Omitting `stratify_vars` preserves the
+existing grouping. This lets users retain many numeric similarity features without
+binning every one of them into the composite stratum.
+
+Before scoring, a run reports local capacity shortfalls separately from thin pools.
+A stratum with 100 targets and 50 controls cannot deliver 1:1, even with abundant
+controls elsewhere. For 1:1 the ceiling is `sum(min(targets, controls))` over strata.
+For 1:n, reports distinguish available assignments, targets that could receive one
+control, and targets that could receive all n controls. These are **upper bounds**,
+not promises of final coverage after candidate pruning or drift trimming.
+
+`assess` ingests once and performs no distance scoring or matching. Its optional
+bin trials measure capacity and pairwise work without mutating the matcher/config.
+Measured recommendations are distinguished from untested suggestions. Fewer bins
+can increase candidate-pair volume; lowering the thin-pool floor cannot create
+matches, since thin strata already participate. No bin setting fixes a global
+shortage of unique controls. Capacity detail defaults to 1,000 strata, configurable
+with `max_report_strata` on `assess`; summary counts remain complete.
 
 ## How It Works
 
@@ -493,6 +876,7 @@ flowchart TD
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `match_vars` | `Sequence[str]` | — *(required)* | Columns used to **stratify** rows into homogeneous groups **and** to score pair distance. Must be non-empty with no duplicates. Cannot overlap `monitor_vars` or `treatment_col`. |
+| `stratify_vars` | `Optional[Sequence[str]]` | `None` | Optional subset of `match_vars` for hard grouping. All numeric match vars still score distance; categorical match vars and all numeric missingness constraints remain hard. `None` preserves existing grouping. |
 | `treatment_col` | `str` | — *(required)* | Binary flag: `1` = campaign target, `0` = candidate control. Must contain both values in the data. |
 | `monitor_vars` | `Sequence[str]` | `()` | Columns **watched, not matched on**. JS (categorical) and KS (numeric) balance checked after matching; over-represented groups can be drift-trimmed. Cannot overlap `match_vars`. |
 | `weights` | `Mapping[str, float]` | `{}` | Per-variable distance multipliers on z-scored `match_vars`. Missing keys default to `1.0`. Unknown keys (not in `match_vars`) are rejected. |
@@ -527,6 +911,7 @@ flowchart TD
 | `cutoff` | The strength quantile actually applied |
 | `coverage_summary` | Counts and percentages for matched targets, unique controls, low-quality matches, no control, and below tolerance |
 | `report` | Module 13 artifacts: `coverage`, `balance` (`pyarrow.Table`), `drift_log` (`pyarrow.Table`), `data_profile` |
+| `report.capacity` | Structural capacity summary, bounded stratum detail, bin edges, and tuning recommendations |
 
 > Both `pairs` and `targets` are `pyarrow.Table` objects. Use Arrow/NumPy
 > (`table.to_pylist()`, `table["col"].to_numpy(zero_copy_only=False)`,
@@ -659,6 +1044,7 @@ tests/                  # 1:1 test coverage for each step
 
 - `plan.md` — the locked product design (source of truth, all 14 modules)
 - `codegraph.md` — the running-code map for LLMs and contributors
+- `docs/plan.md` §4 — implemented capacity preflight and exact-size label-aware downsampling
 - `docs/superpowers/specs/2026-09-20-identity-preserving-speed-pack-design.md`
 - `docs/superpowers/plans/2026-09-20-identity-preserving-speed-pack.md`
 

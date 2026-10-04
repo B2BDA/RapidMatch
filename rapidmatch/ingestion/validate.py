@@ -20,6 +20,7 @@ def column_types(con: duckdb.DuckDBPyConnection, relation: str = "udl_data") -> 
         SELECT column_name, data_type
         FROM information_schema.columns
         WHERE table_name = ?
+        ORDER BY ordinal_position
         """,
         [relation],
     ).fetchall()
@@ -63,6 +64,15 @@ def validate_schema(
     missing = [c for c in needed if c not in types]
     if missing:
         raise ValueError(f"columns not found in input: {missing}")
+    excluded_categories = [
+        v for v in config.match_vars
+        if not is_numeric_dtype(types[v]) and v not in config.grouping_vars
+    ]
+    if excluded_categories:
+        raise ValueError(
+            "categorical match_vars must remain in stratify_vars: "
+            f"{excluded_categories}"
+        )
 
     if treatment_values is None:
         tcol = quote_ident(config.treatment_col)

@@ -12,6 +12,7 @@ from typing import Any, Optional, Sequence
 import pyarrow as pa
 
 from rapidmatch.balance.checker import BalanceRow
+from rapidmatch.coverage.capacity import CapacityReport
 from rapidmatch.drift.correct import TrimEvent
 from rapidmatch.reporting.build_balance_table import build_balance_table
 from rapidmatch.reporting.build_coverage_summary import build_coverage_summary
@@ -24,6 +25,7 @@ class Report:
     balance: pa.Table
     drift_log: pa.Table
     data_profile: Optional[dict[str, Any]] = None
+    capacity: Optional[CapacityReport] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +33,7 @@ class Report:
             "balance": self.balance.to_pylist(),
             "drift_log": self.drift_log.to_pylist(),
             "data_profile": self.data_profile,
+            "capacity": self.capacity.to_dict() if self.capacity is not None else None,
         }
 
 
