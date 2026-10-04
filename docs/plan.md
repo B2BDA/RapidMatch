@@ -1,9 +1,12 @@
-# Plan.md — RapidMatch (RiMatch) Control Group Matching
+# Plan.md — RapidMatch (RiMatch) Matching & Downsampling
 
-**Status:** Design locked (v1). Core library (Modules 1-13) implemented as the
-`rapidmatch` Python package. DuckDB production path is live. The full-target
-comparison and control-capacity warning requirements below are implemented.
-Module 14 (FastAPI) is not started.
+**Status:** Matching v1 is implemented (Modules 1-13) as the `rapidmatch` Python
+package. DuckDB production path, full-target comparison, and the global
+control-pool warning are live. Module 14 (FastAPI) is not started.
+**Next increment (2026-10-04):** stratum-capacity diagnostics, actionable tuning
+recommendations, separate grouping/scoring roles, and exact-size proportional
+stratified random downsampling. Product direction approved; the implementation
+plan in §4 is awaiting review before any code changes. All §4 work is unimplemented.
 `UniversalDataLoader` is vendored from RapidSegment into
 `rapidmatch/ingestion/data_loader.py`. Running-code map: `codegraph.md`.
 See §8 Changelog for details.
@@ -36,16 +39,27 @@ and may never be reused. When the available control pool or feature overlap
 cannot support full coverage, RapidMatch must report that limitation rather than
 silently changing the target population or reusing controls.
 
+The approved next increment also supports memory-driven downsampling of an ML
+training population or other user-supplied dataset. This entry point needs no
+treatment column: it selects exactly the user-requested number of unique source
+rows, allocates sample slots proportionally across chosen strata, and checks the
+sample against the **whole supplied population**. Details and review items: §4.
+
 ## 2. Prior direction (superseded)
 
 An earlier version of this project explored a generic, population-representative
 sampling library (`repsample`) using a pluggable PySpark/PyArrow backend, targeting
 "sample looks like the whole population" rather than "control looks like target."
-That code was built but has been **discarded** — this document supersedes it. The
-current design is purpose-built for treatment/control matching, uses PyArrow + DuckDB
-only (no PySpark), and is simpler as a result.
+That code was built but has been **discarded** — this document supersedes it.
+The implemented library is purpose-built for treatment/control matching using
+DuckDB, PyArrow, and NumPy (no PySpark). The new downsampling feature in §4 will
+share this library's infrastructure; it does not restore the discarded backend
+architecture or code.
 
-## 3. Locked design decisions (v1)
+## 3. Locked design decisions (matching v1)
+
+This section describes the implemented matching contract. Planned extensions and
+the separate downsampling contract are in §4; they are not implemented APIs yet.
 
 | Decision | Choice |
 |---|---|
@@ -262,7 +276,280 @@ built in parallel.
 - [ ] Async/background job handling for large (7M-row) requests, since matching won't
       complete within a single synchronous request cycle
 - [ ] Basic error handling + validation responses (e.g. missing treatment column,
-      unknown variable names)
+       unknown variable names)
+
+## 4. Next increment — capacity guidance & exact-size downsampling
+
+**Status:** Product direction approved on 2026-10-04. This is a documentation-only
+implementation proposal for user review. Complete that review before changing
+application code. The existing module completion marks above describe matching
+v1, not the work below. FastAPI remains deferred.
+
+### 4.1 Agreed outcomes
+
+1. Warn before pairwise scoring when the current strata cannot supply the requested
+   unique controls, even if the total control pool is large enough.
+2. Recommend specific settings to change, explaining the expected benefit and
+   trade-off. Distinguish measured preflight results from untested suggestions.
+3. Allow fewer hard grouping features while retaining more features for similarity
+   scoring; keep existing `MatchConfig` callers backward-compatible.
+4. Add `rapidmatch.random_downsample`, with **proportional stratified random
+   sampling as the default** and no required treatment column or artificial 1/0
+   assignment.
+5. The user supplies `sample_size`. A successful call returns **exactly that many
+   rows**, without replacement. Recommendations never change the requested size
+   or grouping configuration automatically.
+
+### 4.2 Matching: capacity diagnostics and actionable recommendations
+
+**Timing:** extend the coverage checkpoint after DuckDB stratum counts and before
+the Arrow pull / distance scoring. Reuse counts already computed for the run.
+
+Keep these independent facts visible for every target-bearing stratum:
+
+| Indicator | Meaning |
+|---|---|
+| No controls | `C_s = 0`; matching in this stratum is impossible |
+| Capacity shortfall | `C_s < n * T_s`; not enough unique controls for the requested ratio |
+| Thin pool | Pool below `min_control_pool_size` / `min_control_ratio`; limited candidate choice, but still eligible |
+
+`T_s` and `C_s` are target and control counts; `n` is the requested controls per
+target. A stratum with 100 targets and 50 controls is insufficient for 1:1 even
+though it exceeds the default pool floor of five. A stratum with two targets and
+three controls is thin under that floor but can support 1:1.
+
+For 1:1, compute:
+
+```text
+capacity_ceiling     = sum_s min(T_s, C_s)
+unavoidable_shortfall = sum_s max(0, T_s - C_s)
+coverage_ceiling     = capacity_ceiling / total_target_count
+```
+
+For 1:n, report separate quantities rather than conflating assignments with
+covered targets:
+
+```text
+requested_assignments          = n * total_target_count
+assignment_capacity_ceiling    = sum_s min(n * T_s, C_s)
+assignment_shortfall           = sum_s max(0, n * T_s - C_s)
+targets_with_one_control_ceiling = sum_s min(T_s, C_s)
+fully_supplied_targets_ceiling = sum_s min(T_s, floor(C_s / n))
+```
+
+These are structural upper bounds before candidate pruning, greedy allocation,
+tolerance filtering, and drift trimming; they are not promises of final coverage
+or balance. Surplus controls in one stratum cannot cover another stratum's deficit.
+
+**Report:** one aggregate warning plus an inspectable stratum table, not a warning
+per stratum. Include counts, requested ratio, capacity ceilings, unavoidable
+shortfall, number of deficient strata, targets in deficient strata, and thin/no-
+control indicators. Distinguish all targets exposed to a deficit from the smaller
+number necessarily left without controls. Show readable grouping values/bin
+ranges and sort the detail table by shortfall. Attach diagnostics to the result
+report without changing existing match statuses or coverage-key meanings.
+
+**Preflight proposal:** add an explicit assessment operation, provisionally
+`ControlMatcher.assess(data, n_bins_candidates=[4, 3, 2])`. It profiles and counts
+candidate stratifications without scoring or matching, using one ingested source.
+Ordinary `fit_match` runs get the lightweight current-setting diagnostic; broader
+what-if scans are opt-in. Exact public names/report types are review items.
+
+For each trial, report the actual bin setting, capacity ceiling, shortfall,
+target-bearing strata, total candidate pairs `sum_s T_s * C_s`, and largest
+stratum pair count. With candidate cap `K`, also report retained-candidate count
+`sum_s T_s * min(C_s, K)`. The cap bounds retained pairs, not distance work or total
+process memory. Use sufficiently wide arithmetic for large pair counts.
+
+Each recommendation states **setting, proposed value, reason, evidence, and
+trade-off**. Evaluate valid candidate settings rather than assuming fewer bins
+always improve coverage; recomputed quantile partitions need not be nested.
+
+| Cause | Recommendation and limits |
+|---|---|
+| Global control shortage | Explain the fixed-population limit and suggest a larger eligible control pool. Fewer bins or weaker quality thresholds cannot create rows. |
+| Sparse numeric combinations | Try fewer bins (minimum two under the current config), compare capacity and candidate-pair work, and recheck balance after matching. |
+| Too many hard grouping features | Suggest a smaller user-selected stratification set while retaining appropriate similarity features. Never remove a constraint automatically. |
+| High-cardinality categories or missingness patterns | Identify the fragmentation; suggest review of meaningful category grouping or feature roles, subject to the missingness policy in §4.3. |
+| Candidate pruning limits achieved matching | Explain that increasing `max_candidates_per_target` may help at a retained-memory cost; stratum counts alone do not prove pruning caused a particular loss. |
+| Drift trimming reduces final coverage | Point to the drift log and affected monitor groups rather than claiming a bin change will fix it. |
+
+Do not recommend lowering `min_control_pool_size` as a coverage fix: thin strata
+already match. Lowering `tolerance` cannot recover unassigned 1:1 targets because
+the pipeline already preserves primary assignments. When no tested setting can
+meet the requested ratio, say so and report the best tested capacity, not a
+guaranteed solution. Final balance always retains the full target reference.
+
+### 4.3 Matching: separate hard grouping from similarity scoring
+
+With 100 numeric features, even two bins per feature permit `2**100` combinations.
+Only observed strata are materialized, but many can be tiny or lack controls.
+Reducing `n_bins` alone may therefore be insufficient.
+
+**Proposed backward-compatible shape for review:** add optional `stratify_vars`
+to `MatchConfig`, as a subset of `match_vars`. `None` preserves today's behavior:
+all matching features form strata. An explicit subset limits numeric binning to
+that subset, while all numeric `match_vars` continue to contribute to weighted
+distance using global target moments. `monitor_vars` retain their current role.
+This provides the grouping/scoring distinction without requiring existing callers
+to migrate to a new `score_vars` parameter.
+
+Two edge policies must be reviewed explicitly:
+
+- **Categorical similarity:** the current distance is numeric only. Proposed first
+  version requires categorical `match_vars` to remain in `stratify_vars`; reject
+  attempts to exclude them rather than silently ignore them or invent a new
+  categorical distance. Users can explicitly move a variable to monitoring.
+- **Score-only missingness:** proposed first version preserves missing-only-matches-
+  missing for all numeric matching features, including score-only features. Their
+  missingness flags remain hard constraints, never distance inputs. The report
+  must explain that varied missingness patterns can still fragment strata. A
+  relaxed policy would need a separate design decision.
+
+Update validation, preparation, stratification, projected pulls, capacity trials,
+and balance-variable selection consistently. Omitting the new option must preserve
+existing pairs, strengths, ranks, and statuses. Match bin edges and z-moments
+remain target-derived; the population-derived sampling bins below are a separate
+contract.
+
+### 4.4 Downsampling: public contract and proportional allocation
+
+**Proposed API (not yet available):**
+
+```python
+from rapidmatch import random_downsample
+
+result = random_downsample(
+    data="training_data.parquet",
+    sample_size=25_000,  # User chooses this; there is no fixed output size.
+    stratify_vars=["region", "age", "income"],
+    check_vars=["tenure", "spend", "visits"],
+    n_bins=4,
+    random_state=42,
+)
+
+sample = result.sample  # PyArrow Table: exactly 25,000 source rows.
+report = result.report
+```
+
+- `sample_size` is a required positive integer (not a boolean), at most population
+  size `N`. Invalid requests and positive requests on empty input raise clear
+  errors. `sample_size == N` returns every source row once.
+- No treatment column, target/reference split, or pairwise distance scoring is
+  needed. The full user-supplied dataset is the reference population.
+- Accept the existing supported input kinds through `UniversalDataLoader`. Reuse
+  session ownership/cleanup; treat the vendored loader as an upstream dependency.
+- Proposed defaults: `stratify_vars=()` and `check_vars=()`. With no grouping
+  variables, the single population stratum gives simple random sampling without
+  replacement. With grouping variables, proportional stratified sampling applies.
+- Form numeric bin edges from the **whole population**, treating missing grouping
+  values as explicit groups. Preserve source values in the returned sample rather
+  than exposing imputation, bin columns, or a synthetic treatment flag.
+- Check grouping variables plus additional `check_vars` against the full population.
+  Checks are reporting-only: do not invoke matching's drift trimming or silently
+  shrink the sample to satisfy a quality threshold.
+
+**Allocation proposal for review:** for requested size `m` and stratum sizes `N_s`,
+set ideal quotas `q_s = m * N_s / N`. Start with `floor(q_s)` and give the remaining
+slots to the largest fractional remainders. Resolve equal remainders reproducibly
+using the seed and stable stratum identity. Select each quota uniformly at random
+within its stratum without replacement. Use exact/wide arithmetic for allocation
+so numerical rounding cannot change the total. Verify `sum(quota_s) == m` and
+`0 <= quota_s <= N_s` before selection.
+
+Establish stable source-row identity once; select on row identity rather than
+business-id uniqueness or row values. Identical-valued source rows remain distinct
+eligible records. A fixed seed and fixed input/order must reproduce selection;
+the implementation review must settle the identity and seeded-ranking mechanism,
+including its reproducibility scope across thread counts and library versions.
+
+**Size versus representation:** exact size is guaranteed on successful return;
+exact joint-distribution preservation across all features is not. Some tiny strata
+can receive zero slots from proportional rounding, even when `m` exceeds the
+number of strata. If there are 800 nonempty strata and only 500 requested rows,
+representing every stratum is impossible. Report omitted strata and their total
+population share while still returning exactly 500 rows. Forcing one row per
+stratum or oversampling rare groups is a different allocation policy and is not
+part of this default.
+
+### 4.5 Downsampling: diagnostics, guidance, and memory behavior
+
+The proposed report includes:
+
+- Population count, requested/returned counts, seed, settings, and bin edges.
+- Stratum population counts/shares, ideal and allocated sample quotas, selected
+  counts/shares, and zero-allocation groups.
+- Full-population versus sample KS/JS diagnostics for grouping and check variables,
+  including observation counts and missing rates. A comparison with no usable
+  observations must be marked unavailable, not presented as evidence of balance.
+  State the existing JS convention accurately: natural-log divergence, not its
+  square root (range `0` to `ln(2)`).
+- Actionable guidance: increase `sample_size` for better small-group representation,
+  try fewer bins, or review optional grouping variables. These are suggestions;
+  the user's count and constraints remain unchanged until the user changes them.
+
+Keep profiling, full-population binning, stratum counts, allocation, selection,
+and full-population diagnostic work DuckDB-backed with spill-capable operations.
+Avoid a full source-table Arrow/pandas pull and all-pairs matching. Materialize
+only the selected rows and bounded report artifacts in Python; cap/summary large
+stratum reports with an explicit indication that details are truncated. Compare
+candidate settings without simultaneously retaining copies of the population.
+The memory footprint still depends on the requested sample size, row width, and
+DuckDB operations; no blanket constant-memory claim is made.
+
+### 4.6 Implementation stages after plan review
+
+- [ ] **Stage 1 — Capacity diagnostics and guidance.** Extend coverage/reporting,
+      add the aggregate stratum warning and explicit preflight comparisons, and
+      correct any global-shortage wording that suggests quality relaxation alone
+      can overcome a total-row deficit.
+- [ ] **Stage 2 — Grouping/scoring separation.** Resolve the §4.3 policies and add
+      the compatible config option; make preflight use the same preparation and
+      grouping rules as matching.
+- [ ] **Stage 3 — Exact-size downsampling.** Add cohesive sampling configuration,
+      allocation, selection, and result/report modules following §3a. Share input,
+      SQL, and binning infrastructure where appropriate, with explicit reference
+      population selection. Export `random_downsample` and its result type.
+- [ ] **Stage 4 — Population diagnostics and sampling recommendations.** Implement
+      DuckDB-backed checks and sparse-group reporting without trimming output.
+- [ ] **Stage 5 — Verification and documentation.** Add meaningful regression and
+      feature tests; update README, codegraph, working memory, and examples when
+      the APIs are implemented. Record measured results and implementation status
+      here. Run the relevant targeted tests, then `python3 -m pytest tests -q` and
+      the existing `python3 demo.py` smoke run.
+
+**Acceptance checks:**
+
+- Matching detects local shortages even with a global surplus; thin-but-sufficient,
+  no-control, control-only strata, and 1:n assignment/target ceilings are distinct.
+- Warnings precede scoring; preflight performs no pair scoring and does not mutate
+  config. Recommendations show actual measured settings and work/capacity counts.
+- Existing matching calls preserve results. A small grouping set can retain more
+  numeric scoring features; categorical and missingness rules are tested explicitly.
+- Sampling returns the exact count for fractional quotas, many tiny groups,
+  categorical-only/numeric-only/mixed grouping, no grouping, one requested row,
+  and full-population requests. No source-row identity is selected twice.
+- Fixed seeds reproduce selection; duplicate-valued rows, tied quotas, constant
+  features, null groups, unusual category values, and invalid inputs are covered.
+- Sampling bins and diagnostics use the full population. SQL KS/JS agree with
+  small independently calculated examples; unavailable comparisons are explicit.
+- Diagnostics never reduce sample size. Large-data checks confirm absence of a
+  full-population Python materialization and pairwise candidate arrays; DuckDB
+  resources/temp files are cleaned up on success and failure.
+
+### 4.7 Items to settle in the requested review
+
+The approved contracts are exact user-selected size, proportional stratified
+random sampling by default, no treatment-column requirement for sampling, capacity
+warnings, and actionable guidance. Review these proposed implementation details
+before code changes:
+
+1. `stratify_vars` as a subset of existing `match_vars`, including categorical and
+   score-only missingness policies in §4.3.
+2. Public assessment/report names, optional trial controls, and bounded stratum
+   detail presentation.
+3. Largest-remainder quota rounding with seeded ties, source-row identity, and the
+   precise reproducibility guarantee for sampling.
 
 ## 5. Pipeline diagram
 
@@ -350,6 +637,15 @@ deterministic, and easy to explain to a non-technical stakeholder.
     report the average match_strength lost alongside the balance gained.
 
 ## 8. Changelog
+
+- **Capacity guidance and exact-size downsampling planned (2026-10-04).** Approved
+  direction: pre-scoring stratum-capacity warnings, evidence-based configuration
+  recommendations, separate hard grouping from numeric similarity, and
+  `random_downsample` using proportional stratified random selection from the full
+  input population. The user explicitly chooses `sample_size`; successful output
+  must contain exactly that many unique source rows. No artificial treatment flag
+  or automatic size reduction. Detailed plan added in §4 for review before code
+  changes; implementation has not started.
 
 - **Full-target comparison and no-reuse capacity requirement locked (2026-10-01).**
   Final pseudo-control validation must compare all target rows against the
