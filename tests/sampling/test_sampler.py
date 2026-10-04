@@ -66,6 +66,19 @@ def test_seed_reproducible_across_threads_and_changes_selection():
     assert not a.row_ids.equals(c.row_ids)
 
 
+def test_label_and_scope_columns_do_not_collide_with_balance_aliases():
+    data = pa.table({"label": [0, 0, 1, 1] * 20, "scope": [1., 2., 1., 2.] * 20})
+    result = random_downsample(
+        data, sample_size=40, label_col="label", stratify_vars=["scope"],
+        check_by_label=True, random_state=42,
+    )
+    assert class_counts(result) == {0: 20, 1: 20}
+    assert result.report.summary["balance_status"] == "pass"
+    rows = result.report.balance.to_pylist()
+    assert len(rows) == 4  # Three feature scopes plus the descriptive label check.
+    assert all(row["statistic"] == 0 for row in rows)
+
+
 def test_duplicates_missing_categories_and_label_normalization():
     data = pa.table({"Y": [None, None, 0, 0, 1, 1]*10,
                      "g": [None, "__MISSING__", "a|b", "a", "[null]", ""]*10,

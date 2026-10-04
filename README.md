@@ -224,6 +224,26 @@ initial 1,000-row candidate, demonstrates an explicit larger request when needed
 and exports the accepted training sample plus a JSON report. You can also follow
 the steps below sequentially in a notebook.
 
+For full-scale public binary-classification datasets, use these notebooks:
+
+| Notebook | Predictors | Training population | Selected rows |
+|---|---:|---:|---:|
+| [`ML_downsample_HIGGS.ipynb`](ML_downsample_HIGGS.ipynb) | 28 | 10,500,000 | 100,000 |
+| [`ML_downsample_SUSY.ipynb`](ML_downsample_SUSY.ipynb) | 18 | 4,500,000 | 100,000 |
+
+Both reserve the published final 500,000 records for testing, preserve observed
+class proportions, and check every predictor overall and within each class.
+Install `.[notebook]` in your notebook kernel and run the cells in order. The first
+run downloads the complete UCI dataset (HIGGS: about 2.6 GB; SUSY: about 880 MB),
+so run them sequentially and allow working space for Parquet and DuckDB files.
+Shared preparation/plotting helpers live in `notebook_downsample.py`.
+
+Downloads, prepared partitions, and per-run sample/report/plot exports are cached
+under `.cache/ml_downsample/{higgs,susy}/`. Set `RAPIDMATCH_NOTEBOOK_CACHE` to use
+another disk. Each export includes source fingerprints, settings, versions, and
+acceptance status; failed balance checks retain an explicitly named candidate
+with exactly 100,000 rows rather than silently changing the request.
+
 #### 1. Prepare the training population
 
 This small synthetic population makes the example self-contained. For your actual

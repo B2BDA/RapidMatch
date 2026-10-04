@@ -28,7 +28,7 @@ def check_population_balance(con, config, types):
 
 
 def _check_variable(con, var, role, numeric, config):
-    col = quote_ident(var)
+    col = f"src.{quote_ident(var)}"
     value = f"CAST({col} AS DOUBLE)" if numeric else f"CAST(json_array({col}) AS VARCHAR)"
     valid = f"COALESCE(isfinite({col}), FALSE)" if numeric else "TRUE"
     missing = f"NOT ({valid})" if numeric else f"{col} IS NULL"
@@ -38,11 +38,11 @@ def _check_variable(con, var, role, numeric, config):
     combined = f"""
         SELECT d.scope, d.label, {value} AS value, {valid} AS valid,
             1 AS p, 0 AS s, CAST({missing} AS INTEGER) AS pm, 0 AS sm
-        FROM _rs_population, LATERAL (VALUES {scopes}) d(scope, label)
+        FROM _rs_population src, LATERAL (VALUES {scopes}) d(scope, label)
         UNION ALL
         SELECT d.scope, d.label, {value} AS value, {valid} AS valid,
             0 AS p, 1 AS s, 0 AS pm, CAST({missing} AS INTEGER) AS sm
-        FROM _rs_sample, LATERAL (VALUES {scopes}) d(scope, label)
+        FROM _rs_sample src, LATERAL (VALUES {scopes}) d(scope, label)
     """
     if numeric:
         metric = """
