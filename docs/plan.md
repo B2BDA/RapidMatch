@@ -847,6 +847,22 @@ deterministic, and easy to explain to a non-technical stakeholder.
 
 ## 8. Changelog
 
+- **Interactive explainer animation update (2026-10-17).** Redesigned
+  `control-group-interactive.html` as a staged, one-process-per-scene browser
+  walkthrough without changing the Python package contract. The profile scene
+  now exposes scan start/complete states before revealing its cards; binning
+  starts at five bins and shows target/control legends, point arrival,
+  target-derived quantile calculation, and delayed stratum-card reveal. Scoring
+  and candidate-cap scenes share a dedicated target-cycle interval with manual
+  pause/resume/next and click/keyboard selection. Greedy allocation now walks
+  one pair at a time with a live target/control connection, pulsing endpoints,
+  and a separate moving dotted overlay (`bm-line-live`). Reduced-motion mode
+  disables CSS motion but retains discrete target and allocation state changes;
+  the old Scene 5 final-state shortcut was removed. Latest commits are
+  `0830516`, `429a090`, `d1602e1`, `e28b8e2`, `bb24014`, and `5758326`.
+  Browser smoke verification observed `Live connection. T2 takes C6 at
+  strength 0.74`; `uv run pytest tests -q` passed with 111 tests.
+
 - **End-to-end ML usage documented and verified (2026-10-04).** Expanded README
   with a complete training-data walkthrough and added `demo_ml_downsample.py`:
   generate/file-load, request exact rows with label-first quotas, interpret class

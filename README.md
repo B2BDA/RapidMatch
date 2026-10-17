@@ -1067,6 +1067,9 @@ tests/                  # 1:1 test coverage for each step
 - `docs/plan.md` §4 — implemented capacity preflight and exact-size label-aware downsampling
 - `docs/superpowers/specs/2026-09-20-identity-preserving-speed-pack-design.md`
 - `docs/superpowers/plans/2026-09-20-identity-preserving-speed-pack.md`
+- `control-group-interactive.html` — standalone animated browser walkthrough of
+  scan/profile, target-derived binning, scoring, candidate capping, greedy
+  allocation, and reduced-motion-safe live connection states
 
 ## FAQ
 

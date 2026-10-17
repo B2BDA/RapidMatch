@@ -113,6 +113,7 @@ rapidmatch/
 tests/                        1:1 with the step files above
 demo.py                       CLI smoke run
 demo.ipynb                    interactive walkthrough
+control-group-interactive.html standalone animated browser explainer
 plan.md                       locked product design (source of truth)
 ```
 
@@ -421,3 +422,43 @@ Examples: `demo_downsample.py` is a small passing smoke run.
 `demo_ml_downsample.py [output_directory]` is the README's full ML walkthrough:
 100,000-row synthetic Parquet input, initial sample assessment, recommendation
 interpretation, an explicit larger request if needed, and sample/report export.
+
+---
+
+## 13. Interactive explainer handoff (2026-10-17)
+
+`control-group-interactive.html` is a self-contained HTML/CSS/JavaScript
+walkthrough of the browser-side matching parity demo. It mirrors the existing
+synthetic population and pipeline; it is not a production API surface.
+
+The current visual sequence is:
+
+1. **Profile:** red/gray cells scan, then summary cards reveal after
+   `Scanning rows…` → `Scan complete`.
+2. **Stratify:** target/control legend, points arrive, five target-derived
+   quantile boundaries appear, then stratum cards reveal.
+3. **Standardize:** existing global target z-score explanation.
+4. **Score:** eligible target focus auto-cycles with manual pause/resume/next
+   and click/keyboard selection.
+5. **Candidate cap:** follows the same focus target and animates weaker
+   candidates out below K.
+6. **Greedy allocation:** pair queue and bipartite map walk sequentially.
+   Completed links are red; the active link has a separate `bm-line-live`
+   dotted overlay with moving dots when motion is allowed, pulsing endpoint
+   dots, and the live narrative. The step interval is 1,000 ms and the loop
+   remains active in reduced-motion mode as a discrete state sequence.
+
+Important interaction state:
+
+- `focusCycleTimer` is an interval, not a one-shot timeout. It is cleared by
+  manual selection, pause, slider recomputation, or when both focus scenes are
+  outside the viewport.
+- Reduced motion removes CSS transitions/animation, but it does not skip
+  target changes or greedy allocation states. Scene 5 must not restore the old
+  `if (RM_REDUCED) finish()` shortcut.
+- The initial demo settings are five bins and cap three; reset controls match
+  those settings.
+
+Latest browser evidence was captured on the local HTTP preview while Scene 5
+was active: `1 assigned · 0 skipped` followed by
+`Live connection. T2 takes C6 at strength 0.74.`

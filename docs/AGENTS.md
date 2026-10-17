@@ -130,6 +130,63 @@ tests/                  1:1 with step files
 
 `ingestion/data_loader.py` is a vendored RapidSegment copy. Do not rewrite.
 
+## Interactive explainer status (2026-10-17)
+
+`control-group-interactive.html` is a standalone browser explainer for the
+matching pipeline. It is intentionally separate from the Python package and
+does not change the public API or matching implementation.
+
+Current demo configuration and behavior:
+
+- The live demo starts with `n_bins=5` and `max_candidates_per_target=3`;
+  the Tune the engine panel can change both values and reset returns to those
+  demo defaults.
+- Scene 0 (ingest/profile) shows a ready → scanning → complete status. The
+  red/gray row grid scans first; the 80/30/50/profile cards reveal only after
+  the scan completes.
+- Scene 1 (binning/stratification) shows target/control legends, points arriving
+  on the number lines, target-derived quantile edges appearing, and stratum
+  cards revealing after the boundaries are calculated.
+- Scenes 3–4 (scoring and candidate cap) share a focused target. Eligible
+  targets auto-cycle while either scene is visible; `Pause auto-play`,
+  `Resume auto-play`, `Next target`, click, and keyboard activation are
+  supported. A dedicated interval survives the scoring → cap handoff and
+  stops when both scenes leave the viewport.
+- Scene 5 (global greedy allocation) walks one pair at a time. Completed
+  assignments remain red; the current assignment has a separate bright dotted
+  `bm-line-live` overlay, pulsing endpoints, and a `Live connection.` narrative.
+  The walk advances every 1 second and loops while the scene is visible. The
+  replay/pause-loop controls remain available.
+- `prefers-reduced-motion` disables CSS movement but must not skip the
+  explainer's informational state changes. In particular, Scene 5 no longer
+  calls a final-state shortcut in reduced-motion mode; the live dotted state
+  remains visible as a discrete state for about 900 ms.
+
+Recent explainer commits on `main`:
+
+```text
+0830516 fix: preserve greedy live state in reduced motion
+429a090 fix: show dotted live connection overlay
+d1602e1 feat: animate live greedy connections
+e28b8e2 fix: make target cycling continuous
+bb24014 fix: keep target auto-cycle alive
+5758326 feat: animate explainer matching stages
+```
+
+Verification recorded for the latest explainer work:
+
+```text
+node -e "...extract the HTML script and compile with new Function(...)..."
+git diff --check
+uv run pytest tests -q             # 111 passed, 5 warnings
+```
+
+The browser smoke run observed the live greedy state directly while the page
+was in the allocation scene:
+`1 assigned · 0 skipped` and `Live connection. T2 takes C6 at strength 0.74.`
+The bundled `explainer-check.js` remains browser-only; invoking it directly
+with Node fails because it expects `window`.
+
 ## Invariants
 
 1. No control row reused.
