@@ -370,6 +370,8 @@
     50%{filter:drop-shadow(0 0 13px rgba(255,110,99,1));}
   }
   .bm-dot-t,.bm-dot-c{transition:r .3s cubic-bezier(.3,1.4,.5,1), fill .3s ease, stroke .3s ease;}
+  .bm-dot-t.live,.bm-dot-c.live{stroke:#fff;stroke-width:2;filter:drop-shadow(0 0 8px rgba(255,110,99,.9));animation:connectionPulse .65s ease-in-out infinite alternate;}
+  @keyframes connectionPulse{from{r:4;}to{r:6.5;}}
 
   .btn{transition:background .2s, transform .18s cubic-bezier(.3,1.4,.5,1), box-shadow .2s;}
   .btn:hover{transform:translateY(-2px);}
@@ -1366,7 +1368,7 @@ SCENES[4] = {
 /* ---------------- Scene 5: global greedy matching ---------------- */
 SCENES[5] = {
   render(){
-    const SHOW = Math.min(60, R.walk.length);
+    const SHOW = Math.min(24, R.walk.length);
     const rows = R.walk.slice(0, SHOW).map((w, i) => `
       <div class="pair-row" data-i="${i}"><span class="rk">${i + 1}</span><span class="who">${w.t.id}–${w.c.id}</span><span class="ss">${fmt(w.s)}</span><span class="st"></span></div>`).join('');
     // bipartite layout: targets left (rm 1..30), controls right (rm 31..80)
@@ -1422,12 +1424,12 @@ SCENES[5] = {
   play(){
     const S = st(5); clearTimers(S.timers);
     if(S.raf) cancelAnimationFrame(S.raf);
-    const SHOW = Math.min(60, R.walk.length);
+    const SHOW = Math.min(24, R.walk.length);
     const rows = document.querySelectorAll('#pairList .pair-row[data-i]');
     rows.forEach(r => { r.classList.remove('cursor', 'done-yes', 'done-no'); r.querySelector('.st').textContent = ''; });
     document.querySelectorAll('.bm-line').forEach(l => { l.style.transition = 'none'; l.style.strokeDashoffset = '100'; });
-    document.querySelectorAll('.bm-dot-c').forEach(d => d.classList.remove('used'));
-    document.querySelectorAll('.bm-dot-t').forEach(d => d.classList.remove('matched'));
+    document.querySelectorAll('.bm-dot-c').forEach(d => d.classList.remove('used', 'live'));
+    document.querySelectorAll('.bm-dot-t').forEach(d => d.classList.remove('matched', 'live'));
     const count = $('greedyCount');
     const narrative = $('greedyNarrative');
     const { yT, yC, W } = this._lay;
@@ -1440,9 +1442,13 @@ SCENES[5] = {
     const revealAssign = (t, c) => {
       const line = $('bl' + t.rm);
        if(line){ line.style.transition = 'stroke-dashoffset 0.45s ease'; line.style.strokeDashoffset = '0'; line.classList.add('live'); after(560, () => line.classList.remove('live'), S.timers); }
-      const dt = $('bt' + t.rm), dc = $('bc' + c.rm);
-      if(dt) dt.classList.add('matched');
-      if(dc) dc.classList.add('used');
+       const dt = $('bt' + t.rm), dc = $('bc' + c.rm);
+       if(dt) dt.classList.add('matched', 'live');
+       if(dc) dc.classList.add('used', 'live');
+       after(520, () => {
+         if(dt) dt.classList.remove('live');
+         if(dc) dc.classList.remove('live');
+       }, S.timers);
     };
     const finish = () => {
       for(const a of R.assignments) revealAssign(a.t, a.c);
@@ -1464,7 +1470,7 @@ SCENES[5] = {
     if(RM_REDUCED){ finish(); return; }
 
     let i = 0;
-    const stepMs = 60;
+     const stepMs = 620;
     const step = () => {
       if(i >= SHOW){ // fast-forward whatever wasn't shown
         for(const a of R.assignments) revealAssign(a.t, a.c);
@@ -1484,7 +1490,7 @@ SCENES[5] = {
         row.classList.add(w.out === 'assigned' ? 'done-yes' : 'done-no');
         row.querySelector('.st').textContent = w.out === 'assigned' ? 'Assigned' : w.why;
       }
-       if(w.out === 'assigned'){ nA++; revealAssign(w.t, w.c); upd(`${w.t.id} takes ${w.c.id} at strength ${fmt(w.s)}. Both rows are now unavailable to later pairs.`, 'Assigned.'); }
+       if(w.out === 'assigned'){ nA++; revealAssign(w.t, w.c); upd(`${w.t.id} takes ${w.c.id} at strength ${fmt(w.s)}. The live connection locks both rows for this walk.`, 'Live connection.'); }
        else { nS++; upd(`${w.t.id}–${w.c.id} is skipped: ${w.why}.`, 'Skipped.'); }
       i++;
       S.timers.push(setTimeout(step, stepMs));
