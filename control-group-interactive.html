@@ -101,6 +101,11 @@
 
   /* scene 0: scan */
   .scan-stage{position:relative;border-radius:16px;padding:22px;overflow:hidden;}
+  .scan-status{display:flex;align-items:center;gap:9px;margin:-6px 0 16px;color:var(--ink-muted);font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;}
+  .scan-status .signal{width:8px;height:8px;border-radius:50%;background:var(--ink-faint);box-shadow:0 0 0 transparent;transition:background .3s ease,box-shadow .3s ease;}
+  .scan-status.running .signal{background:#E8B93D;box-shadow:0 0 10px rgba(232,185,61,.8);animation:statusPulse 1s ease-in-out infinite;}
+  .scan-status.complete .signal{background:var(--good);box-shadow:0 0 10px rgba(91,214,160,.75);}
+  @keyframes statusPulse{50%{opacity:.45;transform:scale(.75);} }
   .scan-grid{display:grid;grid-template-columns:repeat(20,1fr);gap:6px;}
   .scan-cell{aspect-ratio:1;border-radius:4px;background:var(--glass-strong);opacity:0.25;transition:opacity 0.2s, background 0.2s, box-shadow 0.2s;}
   .scan-cell.scanned{opacity:1;}
@@ -115,6 +120,8 @@
   .stat .v{font-family:'Fraunces',serif;font-size:28px;font-weight:600;}
   .stat .v.red{color:var(--red-strong);}
   .stat .k{font-size:12.5px;color:var(--ink-muted);margin-top:2px;}
+  .scan-results{opacity:0;transform:translateY(14px);pointer-events:none;transition:opacity .65s ease,transform .65s cubic-bezier(.3,1,.4,1);}
+  .scan-results.revealed{opacity:1;transform:none;pointer-events:auto;}
   .capacity-note{margin-top:14px;font-size:13.5px;color:var(--ink-muted);border-left:2px solid var(--red);padding:6px 12px;}
   .capacity-note b{color:var(--ink);}
 
@@ -124,16 +131,26 @@
   .numline-box .nl-title .mono{color:var(--red-strong);}
   svg.nl{width:100%;height:86px;display:block;}
   svg.nl text{font-family:'IBM Plex Mono',monospace;font-size:9.5px;fill:var(--ink-muted);}
-  .nl-dot{transition:transform 0.8s cubic-bezier(.4,1.4,.6,1), opacity 0.5s;}
-  .nl-edge{stroke:var(--red-strong);stroke-width:1.5;stroke-dasharray:4,3;opacity:0;transition:opacity 0.6s;}
-  .scene.in .nl-edge{opacity:0.9;}
+  .nl-dot{opacity:0;transform:translateY(8px) scale(.72);transform-box:fill-box;transform-origin:center;transition:transform 0.55s cubic-bezier(.4,1.4,.6,1), opacity 0.45s;}
+  .nl-dot.visible{opacity:1;transform:none;}
+  .nl-edge{stroke:var(--red-strong);stroke-width:1.5;stroke-dasharray:4,3;opacity:0;transition:opacity 0.6s,stroke-width .25s;}
+  .nl-edge.visible{opacity:0.9;}
   .nl-edge-label{opacity:0;transition:opacity 0.6s 0.3s;}
-  .scene.in .nl-edge-label{opacity:1;}
+  .nl-edge-label.visible{opacity:1;}
+  .data-legend{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:0 0 14px;color:var(--ink-muted);font-size:12.5px;}
+  .data-legend .legend-item{display:inline-flex;align-items:center;gap:7px;}
+  .data-legend .legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+  .data-legend .legend-dot.target{background:var(--red);box-shadow:0 0 7px rgba(228,69,61,.65);}
+  .data-legend .legend-dot.control{background:rgba(255,255,255,.52);}
+  .bin-status{display:flex;align-items:center;gap:9px;margin:-2px 0 13px;color:var(--ink-faint);font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.03em;text-transform:uppercase;}
+  .bin-status .signal{width:7px;height:7px;border-radius:50%;background:var(--ink-faint);}
+  .bin-status.calculating .signal{background:#E8B93D;box-shadow:0 0 9px rgba(232,185,61,.75);}
+  .bin-status.complete .signal{background:var(--good);box-shadow:0 0 9px rgba(91,214,160,.7);}
   .strata-block{margin-top:20px;}
   .strata-block h3{font-size:14px;font-weight:600;margin-bottom:10px;color:var(--ink-muted);font-family:'IBM Plex Sans',sans-serif;}
   .strata-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
   .stratum-card{border-radius:12px;padding:10px 12px;background:var(--glass);border:1px solid var(--border-soft);opacity:0;transform:translateY(10px) scale(0.97);transition:opacity 0.45s,transform 0.45s,border-color 0.3s,box-shadow 0.3s;}
-  .scene.in .stratum-card{opacity:1;transform:none;}
+  .scene.in .stratum-card.revealed{opacity:1;transform:none;}
   .stratum-card .sk{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-muted);margin-bottom:6px;}
   .stratum-card .cnt{font-size:12px;margin-bottom:6px;}
   .stratum-card .cnt .rt{color:var(--red-strong);font-weight:600;}
@@ -366,6 +383,12 @@
   .pair-row.cursor.done-no{background:rgba(255,255,255,0.035);}
   .allocation-callout{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;margin:0 0 14px;padding:10px 12px;border-radius:10px;background:linear-gradient(90deg,var(--red-tint),rgba(255,255,255,0.025));border:1px solid var(--border-soft);font-size:13px;color:var(--ink-muted);}
   .allocation-callout .signal{width:10px;height:10px;border-radius:50%;background:var(--red-strong);box-shadow:0 0 12px var(--red-strong);}
+  .focus-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;}
+  .focus-controls .btn{font-size:12px;padding:6px 11px;}
+  .focus-controls .hint{font-family:'IBM Plex Mono',monospace;font-size:11px;}
+  .loop-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border-soft);border-radius:999px;color:var(--ink-muted);font-family:'IBM Plex Mono',monospace;font-size:10.5px;}
+  .loop-badge .signal{width:6px;height:6px;border-radius:50%;background:var(--good);box-shadow:0 0 8px rgba(91,214,160,.8);}
+  .loop-badge.paused .signal{background:#E8B93D;box-shadow:0 0 8px rgba(232,185,61,.75);}
   .allocation-callout strong{color:var(--ink);}
   .bm-line.live{stroke:#fff;stroke-width:2.4;filter:drop-shadow(0 0 7px rgba(255,110,99,.85));}
   .greedy-layout .bimap-box{max-height:520px;overflow:auto;}
@@ -405,10 +428,10 @@
     <input type="range" id="sWInc" min="0.2" max="3" step="0.1" value="1"></div>
   <div class="ctl"><label>weight · tenure <span class="mono" id="vWTen">1.0</span></label>
     <input type="range" id="sWTen" min="0.2" max="3" step="0.1" value="1"></div>
-  <div class="ctl"><label>n_bins <span class="mono" id="vNBins">3</span></label>
-    <input type="range" id="sNBins" min="2" max="5" step="1" value="3"></div>
-  <div class="ctl"><label>max candidates / target <span class="mono" id="vCap">All</span></label>
-    <input type="range" id="sCap" min="1" max="9" step="1" value="9"></div>
+  <div class="ctl"><label>n_bins <span class="mono" id="vNBins">5</span></label>
+    <input type="range" id="sNBins" min="2" max="5" step="1" value="5"></div>
+  <div class="ctl"><label>max candidates / target <span class="mono" id="vCap">3</span></label>
+    <input type="range" id="sCap" min="1" max="9" step="1" value="3"></div>
   <div class="ctl"><label>tolerance <span class="mono" id="vTol">0.80</span></label>
     <input type="range" id="sTol" min="0" max="1" step="0.05" value="0.8"></div>
   <div class="pulse" id="pulse">recomputed — scenes updated</div>
@@ -741,10 +764,11 @@ function runPipeline(cfg){
 }
 
 /* ---------------- shared state & helpers ---------------- */
-const DEFAULT_CFG = { wInc: 1, wTen: 1, nBins: 3, cap: null, tolerance: 0.8 };
+const DEFAULT_CFG = { wInc: 1, wTen: 1, nBins: 5, cap: 3, tolerance: 0.8 };
 let cfg = { ...DEFAULT_CFG };
 let R = runPipeline(cfg);
 let focusRm = null; // focused target for scenes 3-4
+let focusPlaybackPaused = false;
 
 const fmt = (x, d = 2) => Number(x).toFixed(d);
 const $ = id => document.getElementById(id);
@@ -874,23 +898,34 @@ SCENES[0] = {
       <h2 class="fade-up d1">First, look at the data</h2>
       <p class="lead fade-up d2">RiMatch streams the file into DuckDB and profiles it in <b>one batched pass</b> — row counts, null rates, column types, and the target/control split. Nothing is matched yet; we just need to know what we're holding.</p>
       <div class="scan-stage glass fade-up d3">
+        <div class="scan-status" id="scanStatus"><span class="signal"></span><span id="scanStatusText">Ready to scan</span></div>
         <div class="scan-grid" id="scanGrid">${SCAN_ORDER.map(r =>
           `<div class="scan-cell" data-t="${r.t}"></div>`).join('')}</div>
         <div class="scanline" id="scanline"></div>
       </div>
-      <div class="scan-stats">
-        <div class="stat glass fade-up d3"><div class="v" id="stRows">0</div><div class="k">rows scanned</div></div>
-        <div class="stat glass fade-up d3"><div class="v red" id="stT">0</div><div class="k">targeted (treatment = 1)</div></div>
-        <div class="stat glass fade-up d4"><div class="v" id="stC">0</div><div class="k">not targeted (control pool)</div></div>
-        <div class="stat glass fade-up d4"><div class="v" id="stNull">0</div><div class="k">nulls · 4 columns, 1 binary flag</div></div>
-      </div>
-      <p class="capacity-note fade-up d4">Control pool <b>50 ≥ 30 targets</b> — full unique 1:1 coverage is possible without reusing anyone. (If the pool were smaller, RiMatch would warn here and report the shortfall instead of silently reusing controls.)</p>`;
+      <div class="scan-results" id="scanResults">
+        <div class="scan-stats">
+          <div class="stat glass fade-up d3"><div class="v" id="stRows">0</div><div class="k">rows scanned</div></div>
+          <div class="stat glass fade-up d3"><div class="v red" id="stT">0</div><div class="k">targeted (treatment = 1)</div></div>
+          <div class="stat glass fade-up d4"><div class="v" id="stC">0</div><div class="k">not targeted (control pool)</div></div>
+          <div class="stat glass fade-up d4"><div class="v" id="stNull">0</div><div class="k">nulls · 4 columns, 1 binary flag</div></div>
+        </div>
+        <p class="capacity-note fade-up d4">Control pool <b>50 ≥ 30 targets</b> — full unique 1:1 coverage is possible without reusing anyone. (If the pool were smaller, RiMatch would warn here and report the shortfall instead of silently reusing controls.)</p>
+      </div>`;
   },
   play(){
     const S = st(0); clearTimers(S.timers);
     const cells = [...document.querySelectorAll('#scanGrid .scan-cell')];
     cells.forEach(c => c.classList.remove('scanned', 't', 'c'));
     const line = $('scanline');
+    const status = $('scanStatus');
+    const statusText = $('scanStatusText');
+    const results = $('scanResults');
+    results.classList.remove('revealed');
+    status.classList.remove('complete');
+    status.classList.add('running');
+    statusText.textContent = 'Scanning rows…';
+    announce('Scanning the 80-row input population.');
     line.classList.remove('run');
     void line.offsetWidth;
     line.classList.add('run');
@@ -902,10 +937,15 @@ SCENES[0] = {
       }, S.timers);
     });
     after(RM_REDUCED ? 0 : 2300, () => {
+      status.classList.remove('running');
+      status.classList.add('complete');
+      statusText.textContent = 'Scan complete';
+      results.classList.add('revealed');
       animateNumber($('stRows'), 80, 700, v => Math.round(v));
       animateNumber($('stT'), 30, 700, v => Math.round(v));
       animateNumber($('stC'), 50, 700, v => Math.round(v));
       $('stNull').textContent = '0';
+      announce('Scan complete. 80 rows profiled: 30 targets and 50 controls.');
     }, S.timers);
   }
 };
@@ -920,7 +960,8 @@ function numlineSVG(id, values, edges, unit, color){
     const v = r[color];
     const lane = r.t ? 26 : 54;
     const jit = ((i * 37) % 13) - 6;
-    dots += `<circle class="nl-dot" cx="${x(v).toFixed(1)}" cy="${lane + jit * 0.9}" r="3.6"
+    dots += `<circle class="nl-dot ${r.t ? 'target' : 'control'}" cx="${x(v).toFixed(1)}" cy="${lane + jit * 0.9}" r="3.6"
+      data-rm="${r.rm}"
       fill="${r.t ? 'var(--red)' : 'rgba(255,255,255,0.30)'}"/>`;
   });
   let els = '';
@@ -954,8 +995,10 @@ SCENES[1] = {
     $('sc1-inner').innerHTML = `
       <div class="scene-tag fade-up">Module 5 · binning &amp; stratification</div>
       <h2 class="fade-up d1">Bin on the target, group everyone</h2>
-      <p class="lead fade-up d2">Numeric variables are cut into <b>${R.cfg.nBins} quantile bins</b> — and the edges are computed <b>from the target group only</b>, so the grid is defined by who was treated, never by the control pool. Those same edges are then applied to everyone. Rows that land in the same bins <b>and</b> share a region form a <b>stratum</b>; comparisons only ever happen inside one.</p>
-      <div class="numline-box glass fade-up d3">
+       <p class="lead fade-up d2">Numeric variables are cut into <b>${R.cfg.nBins} quantile bins</b> — and the edges are computed <b>from the target group only</b>, so the grid is defined by who was treated, never by the control pool. Those same edges are then applied to everyone. Rows that land in the same bins <b>and</b> share a region form a <b>stratum</b>; comparisons only ever happen inside one.</p>
+       <div class="data-legend fade-up d2" aria-label="Data point legend"><span class="legend-item"><span class="legend-dot target"></span>target · treatment = 1</span><span class="legend-item"><span class="legend-dot control"></span>control · treatment = 0</span></div>
+       <div class="bin-status fade-up d2" id="binStatus"><span class="signal"></span><span id="binStatusText">Waiting for the population</span></div>
+       <div class="numline-box glass fade-up d3">
         <div class="nl-title"><span>income — ${R.eInc.length} target-derived edges</span><span class="mono">quantile_cont(income) WHERE treatment = 1</span></div>
         ${numlineSVG('nlInc', POP.map(r => r.income), R.eInc, '$k', 'income')}
       </div>
@@ -968,7 +1011,46 @@ SCENES[1] = {
         <div class="strata-grid">${cardsHtml}</div>
       </div>`;
   },
-  play(){ /* edges + cards animate via .scene.in CSS */ }
+  play(){
+    const S = st(1); clearTimers(S.timers);
+    const status = $('binStatus');
+    const statusText = $('binStatusText');
+    const dots = [...document.querySelectorAll('#sc1 .nl-dot')];
+    const edges = [...document.querySelectorAll('#sc1 .nl-edge')];
+    const labels = [...document.querySelectorAll('#sc1 .nl-edge-label')];
+    const cards = [...document.querySelectorAll('#sc1 .stratum-card')];
+    status.classList.remove('complete');
+    status.classList.add('calculating');
+    statusText.textContent = `Loading ${POP.length} rows into the binning view`;
+    announce(`Loading target and control points before calculating ${R.cfg.nBins} target-derived bins.`);
+    dots.forEach(dot => dot.classList.remove('visible'));
+    edges.forEach(edge => edge.classList.remove('visible'));
+    labels.forEach(label => label.classList.remove('visible'));
+    cards.forEach(card => card.classList.remove('revealed'));
+
+    const pointDelay = RM_REDUCED ? 0 : 15;
+    dots.forEach((dot, i) => after(RM_REDUCED ? 0 : 140 + i * pointDelay, () => {
+      dot.classList.add('visible');
+    }, S.timers));
+    const pointDone = RM_REDUCED ? 0 : 140 + dots.length * pointDelay + 180;
+    after(pointDone, () => {
+      statusText.textContent = `Calculating ${R.cfg.nBins} target-derived quantile bins…`;
+      announce(`Calculating ${R.cfg.nBins} quantile bins from target rows only.`);
+      edges.forEach((edge, i) => after(RM_REDUCED ? 0 : i * 180, () => edge.classList.add('visible'), S.timers));
+      labels.forEach((label, i) => after(RM_REDUCED ? 0 : 240 + i * 180, () => label.classList.add('visible'), S.timers));
+    }, S.timers);
+    const edgeDone = pointDone + (RM_REDUCED ? 0 : 240 + Math.max(edges.length, labels.length) * 180 + 220);
+    after(edgeDone, () => {
+      status.classList.remove('calculating');
+      status.classList.add('complete');
+      statusText.textContent = `${R.cfg.nBins} target-derived bins ready · strata forming`;
+      announce(`Quantile calculation complete. The same ${R.cfg.nBins} boundaries are now grouping targets and controls.`);
+      cards.forEach((card, i) => after(RM_REDUCED ? 0 : i * 45, () => card.classList.add('revealed'), S.timers));
+      after(RM_REDUCED ? 0 : Math.min(700, cards.length * 45 + 120), () => {
+        statusText.textContent = `${R.cfg.nBins} bins applied to everyone · strata ready`;
+      }, S.timers);
+    }, S.timers);
+  }
 };
 
 /* ---------------- Scene 2: z-score ---------------- */
@@ -1028,6 +1110,54 @@ SCENES[2] = {
 
 /* ---------------- Scene 3: distance & strength ---------------- */
 function focusTarget(){ return POP.find(r => r.rm === focusRm) || pickFocusTarget(); }
+function focusableTargets(){
+  const withCandidates = R.targets.filter(t => candidatesFor(t).length);
+  return withCandidates.length ? withCandidates : R.targets;
+}
+function nextFocusTarget(){
+  const list = focusableTargets();
+  if(!list.length) return null;
+  const current = focusTarget();
+  const index = Math.max(0, list.findIndex(t => t.rm === current?.rm));
+  return list[(index + 1) % list.length];
+}
+function updateFocusControls(){
+  document.querySelectorAll('[data-focus-auto]').forEach(button => {
+    button.textContent = focusPlaybackPaused ? 'Resume auto-play' : 'Pause auto-play';
+  });
+  document.querySelectorAll('[data-focus-badge]').forEach(badge => {
+    badge.classList.toggle('paused', focusPlaybackPaused);
+    const text = badge.querySelector('.focus-badge-text');
+    if(text) text.textContent = focusPlaybackPaused ? 'target selection paused' : 'auto-cycling targets';
+  });
+}
+function updateGreedyControls(){
+  const state = st(5);
+  const toggle = $('greedyLoopToggle');
+  const badge = $('greedyLoopBadge');
+  if(toggle) toggle.textContent = state.loopPaused ? 'Resume loop' : 'Pause loop';
+  if(badge){
+    badge.classList.toggle('paused', !!state.loopPaused);
+    const text = badge.querySelector('.focus-badge-text');
+    if(text) text.textContent = state.loopPaused ? 'loop paused' : 'looping allocation';
+  }
+}
+function renderFocusScenes(owner, announceSelection = false){
+  const target = focusTarget();
+  if(!target) return;
+  SCENES[3].render();
+  SCENES[4].render();
+  SCENES[3].play();
+  if(visibleScenes.has(4)) SCENES[4].play();
+  updateFocusControls();
+  if(announceSelection) announce(`${target.id} selected. Showing ${candidatesFor(target).length} eligible control candidates.`);
+}
+function advanceFocus(owner){
+  const next = nextFocusTarget();
+  if(!next) return;
+  focusRm = next.rm;
+  renderFocusScenes(owner);
+}
 function candidatesFor(t){
   const s = R.strata[t.stratum];
   if(!s) return [];
@@ -1057,7 +1187,7 @@ SCENES[3] = {
     }
     for(const r of POP){
       if(r.t === 1){
-        pts += `<circle class="pt t ${r.rm === t.rm ? 'focus' : ''}" data-tfocus="${r.rm}" cx="${X(r.ai).toFixed(1)}" cy="${Y(r.at).toFixed(1)}" r="${r.rm === t.rm ? 7.5 : 5}"><title>${r.id} · ${r.region} · $${r.income}k · ${r.tenure}y</title></circle>`;
+        pts += `<circle class="pt t ${r.rm === t.rm ? 'focus' : ''}" data-tfocus="${r.rm}" tabindex="0" role="button" aria-label="Select target ${r.id}" cx="${X(r.ai).toFixed(1)}" cy="${Y(r.at).toFixed(1)}" r="${r.rm === t.rm ? 7.5 : 5}"><title>${r.id} · ${r.region} · $${r.income}k · ${r.tenure}y</title></circle>`;
       }
     }
     cands.forEach((k, i) => {
@@ -1072,8 +1202,13 @@ SCENES[3] = {
     $('sc3-inner').innerHTML = `
       <div class="scene-tag fade-up">Module 7b · scoring</div>
       <h2 class="fade-up d1">Every eligible pair gets a distance</h2>
-      <p class="lead fade-up d2">Within <b>${t.id}</b>'s stratum, every control candidate is scored. Each axis below is a z-score <b>stretched by its weight</b> (<span class="mono">a = w · z</span>), so ordinary straight-line distance here <i>is</i> the weighted Euclidean distance. Then <span class="mono">strength = e<sup>−d</sup></span> relabels that gap on a 0–1 ruler: identical rows score 1, farther slides toward 0. Ranking never changes — only the scale becomes comparable across strata. <b>Click any red dot</b> to re-run this for another target.</p>
-      <div class="scatter-layout">
+       <p class="lead fade-up d2">Within <b>${t.id}</b>'s stratum, every control candidate is scored. Each axis below is a z-score <b>stretched by its weight</b> (<span class="mono">a = w · z</span>), so ordinary straight-line distance here <i>is</i> the weighted Euclidean distance. Then <span class="mono">strength = e<sup>−d</sup></span> relabels that gap on a 0–1 ruler: identical rows score 1, farther slides toward 0. Ranking never changes — only the scale becomes comparable across strata. <b>Click any red dot</b> to re-run this for another target.</p>
+       <div class="focus-controls fade-up d2">
+         <button class="btn" type="button" data-focus-auto>${focusPlaybackPaused ? 'Resume auto-play' : 'Pause auto-play'}</button>
+         <button class="btn" type="button" data-focus-next>Next target</button>
+         <span class="loop-badge ${focusPlaybackPaused ? 'paused' : ''}" data-focus-badge><span class="signal"></span><span class="focus-badge-text">${focusPlaybackPaused ? 'target selection paused' : 'auto-cycling targets'}</span></span>
+       </div>
+       <div class="scatter-layout">
         <div class="scatter-box glass fade-up d3">
           <svg class="scatter" viewBox="0 0 ${W} ${H}">
             <line class="axis" x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}"/>
@@ -1092,12 +1227,32 @@ SCENES[3] = {
         </div>
       </div>`;
     document.querySelectorAll('[data-tfocus]').forEach(el => {
-      el.addEventListener('click', () => {
+      const select = () => {
+        focusPlaybackPaused = true;
         focusRm = +el.dataset.tfocus;
-        SCENES[3].render(); SCENES[3].play();
-        SCENES[4].render(); SCENES[4].play();
+        renderFocusScenes(3, true);
+      };
+      el.addEventListener('click', select);
+      el.addEventListener('keydown', event => {
+        if(event.key === 'Enter' || event.key === ' '){ event.preventDefault(); select(); }
       });
     });
+    document.querySelectorAll('#sc3 [data-focus-auto]').forEach(button => {
+      button.addEventListener('click', () => {
+        focusPlaybackPaused = !focusPlaybackPaused;
+        updateFocusControls();
+        clearTimers(st(3).timers);
+        clearTimers(st(4).timers);
+        if(!focusPlaybackPaused) renderFocusScenes(3);
+      });
+    });
+    document.querySelectorAll('#sc3 [data-focus-next]').forEach(button => {
+      button.addEventListener('click', () => {
+        focusPlaybackPaused = true;
+        advanceFocus(3);
+      });
+    });
+    updateFocusControls();
   },
   play(){
     const S = st(3); clearTimers(S.timers);
@@ -1119,6 +1274,9 @@ SCENES[3] = {
         }
       }, S.timers);
     });
+    if(!RM_REDUCED && !focusPlaybackPaused && visibleScenes.has(3)){
+      after(2300 + Math.min(8, cands.length) * 160, () => advanceFocus(3), S.timers);
+    }
   }
 };
 
@@ -1129,7 +1287,7 @@ SCENES[4] = {
     const cands = candidatesFor(t);
     const K = R.cfg.cap;
     const list = cands.map((k, i) => `
-      <div class="cand-row ${K !== null && i >= K ? 'cut-pending' : 'show'}" data-i="${i}">
+      <div class="cand-row show ${K !== null && i >= K ? 'cap-pending' : ''}" data-i="${i}">
         <span class="cid">${k.c.id}</span>
         <div class="bar-track"><div class="bar-fill" style="width:${(k.s * 100).toFixed(0)}%"></div></div>
         <span class="sv">s ${fmt(k.s)}</span>
@@ -1139,7 +1297,12 @@ SCENES[4] = {
       <h2 class="fade-up d1">Keep only the K closest per target</h2>
       <p class="lead fade-up d2">${K === null
         ? `The engine default is <b>no cap</b> — every pair is kept, exactly. On multi-million-row data you can set a cap (try the slider, top right) and each target keeps only its K strongest controls. A target's nearest control is never dropped, so match quality is preserved; only <b>retained memory</b> shrinks. The distance math itself is unchanged.`
-        : `Cap is <b>K = ${K}</b>: each target keeps only its ${K} strongest control${K > 1 ? 's' : ''}. Watch ${t.id}'s weaker candidates fade below — they are never stored, never enter the global pool. ${t.id}'s nearest control is always safe.`}</p>
+         : `Cap is <b>K = ${K}</b>: each target keeps only its ${K} strongest control${K > 1 ? 's' : ''}. Watch ${t.id}'s weaker candidates fade below — they are never stored, never enter the global pool. ${t.id}'s nearest control is always safe.`}</p>
+       <div class="focus-controls fade-up d2">
+         <button class="btn" type="button" data-focus-auto>${focusPlaybackPaused ? 'Resume auto-play' : 'Pause auto-play'}</button>
+         <button class="btn" type="button" data-focus-next>Next target</button>
+         <span class="loop-badge ${focusPlaybackPaused ? 'paused' : ''}" data-focus-badge><span class="signal"></span><span class="focus-badge-text">${focusPlaybackPaused ? 'target selection paused' : 'auto-cycling targets'}</span></span>
+       </div>
       <div class="scatter-layout">
         <div class="cand-list fade-up d3" id="capList" style="max-height:430px;overflow-y:auto;">${list}</div>
         <div class="fade-up d4">
@@ -1147,17 +1310,38 @@ SCENES[4] = {
             <div class="stat glass"><div class="v" id="capTotal">0</div><div class="k">pairs scored (all strata)</div></div>
             <div class="stat glass"><div class="v red" id="capKept">0</div><div class="k">pairs retained after cap</div></div>
           </div>
-          <p class="hint" style="margin-top:12px;">Strata smaller than K are untouched, so everyday datasets behave byte-identically to the uncapped run.</p>
-        </div>
-      </div>`;
+         <p class="hint" style="margin-top:12px;">Strata smaller than K are untouched, so everyday datasets behave byte-identically to the uncapped run.</p>
+         </div>
+       </div>`;
+    document.querySelectorAll('#sc4 [data-focus-auto]').forEach(button => {
+      button.addEventListener('click', () => {
+        focusPlaybackPaused = !focusPlaybackPaused;
+        updateFocusControls();
+        clearTimers(st(3).timers);
+        clearTimers(st(4).timers);
+        if(!focusPlaybackPaused) renderFocusScenes(4);
+      });
+    });
+    document.querySelectorAll('#sc4 [data-focus-next]').forEach(button => {
+      button.addEventListener('click', () => {
+        focusPlaybackPaused = true;
+        advanceFocus(4);
+      });
+    });
+    updateFocusControls();
   },
   play(){
     const S = st(4); clearTimers(S.timers);
     animateNumber($('capTotal'), R.totalPairs, 800, v => Math.round(v));
     animateNumber($('capKept'), R.pairs.length, 800, v => Math.round(v));
-    document.querySelectorAll('#capList .cut-pending').forEach((row, i) => {
-      after(300 + i * 130, () => { row.classList.remove('cut-pending'); row.classList.add('show', 'cut'); }, S.timers);
+    const rows = [...document.querySelectorAll('#capList .cand-row')];
+    rows.forEach(row => { row.classList.add('show'); row.classList.remove('cut'); });
+    document.querySelectorAll('#capList .cap-pending').forEach((row, i) => {
+      after(RM_REDUCED ? 0 : 650 + i * 130, () => { row.classList.add('cut'); }, S.timers);
     });
+    if(!RM_REDUCED && !focusPlaybackPaused && !visibleScenes.has(3) && visibleScenes.has(4)){
+      after(3000 + Math.min(rows.length, 8) * 120, () => advanceFocus(4), S.timers);
+    }
   }
 };
 
@@ -1190,10 +1374,12 @@ SCENES[5] = {
       <div class="scene-tag fade-up">Module 8 · global greedy matching</div>
       <h2 class="fade-up d1">Strongest pair anywhere wins, first</h2>
       <p class="lead fade-up d2">All <b>${R.pairs.length} retained pairs</b> from every stratum are pooled and sorted by strength — the whole population competes, not per-silo. The engine walks the list top-down and assigns a pair only if <b>both sides are still free</b>. A control row is used <b>at most once, ever</b> (sampling without replacement). Watch the walk happen.</p>
-      <div class="play-row fade-up d3">
-        <button class="btn primary" id="greedyReplay" aria-describedby="greedyNarrative">Replay the walk</button>
-        <span class="live-count" id="greedyCount" aria-live="polite">0 assigned · 0 skipped · 0 / ${SHOW} pairs shown</span>
-      </div>
+       <div class="play-row fade-up d3">
+         <button class="btn primary" id="greedyReplay" aria-describedby="greedyNarrative">Replay the walk</button>
+         <button class="btn" id="greedyLoopToggle" type="button">Pause loop</button>
+         <span class="loop-badge" id="greedyLoopBadge"><span class="signal"></span><span class="focus-badge-text">looping allocation</span></span>
+         <span class="live-count" id="greedyCount" aria-live="polite">0 assigned · 0 skipped · 0 / ${SHOW} pairs shown</span>
+       </div>
       <div class="allocation-callout fade-up d3" id="greedyNarrative" aria-live="polite"><span class="signal"></span><span><strong>Ready.</strong> Press replay to watch the strongest available pair claim both sides.</span></div>
       <div class="greedy-layout">
         <div class="pair-list fade-up d3" id="pairList">${rows}
@@ -1201,7 +1387,19 @@ SCENES[5] = {
         </div>
         <div class="bimap-box glass fade-up d4"><svg class="bimap" viewBox="0 0 ${W} ${H}">${lines}${dots}</svg></div>
       </div>`;
-    $('greedyReplay').addEventListener('click', () => SCENES[5].play());
+    const greedyState = st(5);
+    $('greedyReplay').addEventListener('click', () => {
+      greedyState.loopPaused = false;
+      updateGreedyControls();
+      SCENES[5].play();
+    });
+    $('greedyLoopToggle').addEventListener('click', () => {
+      greedyState.loopPaused = !greedyState.loopPaused;
+      if(greedyState.loopPaused) clearTimers(greedyState.timers);
+      updateGreedyControls();
+      if(!greedyState.loopPaused) SCENES[5].play();
+    });
+    updateGreedyControls();
   },
   play(){
     const S = st(5); clearTimers(S.timers);
@@ -1240,6 +1438,11 @@ SCENES[5] = {
        count.textContent = `${nA} assigned · ${nS} skipped — done`;
        if(narrative) narrative.innerHTML = `<span class="signal"></span><span><strong>Allocation complete.</strong> ${nA} unique controls are locked to ${nA} targets; ${nS} candidate rows were rejected because one side was already claimed.</span>`;
     };
+    const scheduleLoop = () => {
+      if(!S.loopPaused && !RM_REDUCED && visibleScenes.has(5)){
+        S.timers.push(setTimeout(() => SCENES[5].play(), 1500));
+      }
+    };
     if(RM_REDUCED){ finish(); return; }
 
     let i = 0;
@@ -1248,9 +1451,10 @@ SCENES[5] = {
       if(i >= SHOW){ // fast-forward whatever wasn't shown
         for(const a of R.assignments) revealAssign(a.t, a.c);
         nA = R.assignments.length; nS = R.walk.length - nA;
-        count.textContent = `${nA} assigned · ${nS} skipped — done`;
-        if(narrative) narrative.innerHTML = `<span class="signal"></span><span><strong>Allocation complete.</strong> The visible queue is capped at ${SHOW} rows; the remaining candidates were fast-forwarded without changing the result.</span>`;
-        return;
+         count.textContent = `${nA} assigned · ${nS} skipped — done`;
+         if(narrative) narrative.innerHTML = `<span class="signal"></span><span><strong>Allocation complete.</strong> The visible queue is capped at ${SHOW} rows; the remaining candidates were fast-forwarded without changing the result.</span>`;
+         scheduleLoop();
+         return;
       }
       const w = R.walk[i];
       const row = rows[i];
@@ -1575,7 +1779,7 @@ function wirePanel(){
   };
   ['sWInc', 'sWTen', 'sNBins', 'sCap', 'sTol'].forEach(id => $(id).addEventListener('input', onInput));
   $('resetCfg').addEventListener('click', () => {
-    $('sWInc').value = 1; $('sWTen').value = 1; $('sNBins').value = 3; $('sCap').value = 9; $('sTol').value = 0.8;
+    $('sWInc').value = 1; $('sWTen').value = 1; $('sNBins').value = 5; $('sCap').value = 3; $('sTol').value = 0.8;
     onInput();
   });
 }
@@ -1645,6 +1849,8 @@ const observer = new IntersectionObserver(entries => {
       SCENES[n].play();
     } else {
       visibleScenes.delete(n);
+      clearTimers(st(n).timers);
+      if(n === 3 && visibleScenes.has(4) && !focusPlaybackPaused) SCENES[4].play();
     }
     if(railDots[n]) railDots[n].classList.toggle('active', e.isIntersecting);
   }
