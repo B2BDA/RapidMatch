@@ -858,15 +858,16 @@ function after(ms, fn, bag){
 }
 function clearTimers(bag){ if(bag){ bag.forEach(clearTimeout); bag.length = 0; } }
 function clearFocusCycle(){
-  if(focusCycleTimer){ clearTimeout(focusCycleTimer); focusCycleTimer = 0; }
+  if(focusCycleTimer){ clearInterval(focusCycleTimer); focusCycleTimer = 0; }
 }
 function scheduleFocusCycle(delay){
   clearFocusCycle();
-  if(RM_REDUCED || focusPlaybackPaused || (!visibleScenes.has(3) && !visibleScenes.has(4))) return;
-  focusCycleTimer = setTimeout(() => {
-    focusCycleTimer = 0;
+  if(focusPlaybackPaused || (!visibleScenes.has(3) && !visibleScenes.has(4))) return;
+  const interval = Math.max(2600, delay || 0);
+  focusCycleTimer = setInterval(() => {
     if(!focusPlaybackPaused && (visibleScenes.has(3) || visibleScenes.has(4))) advanceFocus('auto');
-  }, delay);
+    else if(!visibleScenes.has(3) && !visibleScenes.has(4)) clearFocusCycle();
+  }, interval);
 }
 function clearTimersForAllScenes(){
   for(const k in sceneState){
@@ -1166,7 +1167,7 @@ function renderFocusScenes(owner, announceSelection = false){
   if(announceSelection) announce(`${target.id} selected. Showing ${candidatesFor(target).length} eligible control candidates.`);
 }
 function advanceFocus(owner){
-  if(owner === 'auto' && (RM_REDUCED || focusPlaybackPaused)) return;
+  if(owner === 'auto' && focusPlaybackPaused) return;
   const next = nextFocusTarget();
   if(!next) return;
   focusRm = next.rm;
