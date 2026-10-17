@@ -233,6 +233,9 @@
   svg.bimap{width:100%;height:auto;display:block;}
   svg.bimap text{font-family:'IBM Plex Mono',monospace;font-size:9px;fill:var(--ink-faint);}
   .bm-line{fill:none;stroke:var(--red);stroke-width:1.3;opacity:0.65;}
+  .bm-line-live{fill:none;stroke:#fff;stroke-width:2.8;stroke-linecap:round;stroke-dasharray:1.8 5.2;stroke-dashoffset:0;opacity:0;pointer-events:none;filter:drop-shadow(0 0 7px rgba(255,110,99,.95));}
+  .bm-line-live.live{opacity:1;animation:liveDottedFlow .9s linear infinite;}
+  @keyframes liveDottedFlow{to{stroke-dashoffset:-7;}}
   .bm-dot-t{fill:var(--red);}
   .bm-dot-c{fill:rgba(255,255,255,0.30);}
   .bm-dot-c.used{fill:#fff;stroke:var(--red-strong);stroke-width:1;}
@@ -391,6 +394,8 @@
   .loop-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border-soft);border-radius:999px;color:var(--ink-muted);font-family:'IBM Plex Mono',monospace;font-size:10.5px;}
   .loop-badge .signal{width:6px;height:6px;border-radius:50%;background:var(--good);box-shadow:0 0 8px rgba(91,214,160,.8);}
   .loop-badge.paused .signal{background:#E8B93D;box-shadow:0 0 8px rgba(232,185,61,.75);}
+  .connection-key{display:inline-flex;align-items:center;gap:6px;color:var(--ink-muted);font-family:'IBM Plex Mono',monospace;font-size:10.5px;}
+  .connection-key .swatch{width:18px;border-top:2px dotted #fff;filter:drop-shadow(0 0 4px rgba(255,110,99,.8));}
   .allocation-callout strong{color:var(--ink);}
   .bm-line.live{stroke:#fff;stroke-width:2.4;filter:drop-shadow(0 0 7px rgba(255,110,99,.85));}
   .greedy-layout .bimap-box{max-height:520px;overflow:auto;}
@@ -1381,7 +1386,8 @@ SCENES[5] = {
     let dots = '', lines = '';
     for(const a of R.assignments){
       const y1 = yT.get(a.t.rm), y2 = yC.get(a.c.rm);
-      lines += `<path class="bm-line" id="bl${a.t.rm}" d="M46 ${y1} C ${W * 0.38} ${y1}, ${W * 0.62} ${y2}, ${W - 46} ${y2}" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/>`;
+      const d = `M46 ${y1} C ${W * 0.38} ${y1}, ${W * 0.62} ${y2}, ${W - 46} ${y2}`;
+      lines += `<path class="bm-line" id="bl${a.t.rm}" d="${d}" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/><path class="bm-line-live" id="bll${a.t.rm}" d="${d}" pathLength="100"/>`;
     }
     for(const t of R.targets){
       dots += `<circle class="bm-dot-t" id="bt${t.rm}" cx="40" cy="${yT.get(t.rm)}" r="4"><title>${t.id}</title></circle>`;
@@ -1398,6 +1404,7 @@ SCENES[5] = {
          <button class="btn primary" id="greedyReplay" aria-describedby="greedyNarrative">Replay the walk</button>
          <button class="btn" id="greedyLoopToggle" type="button">Pause loop</button>
          <span class="loop-badge" id="greedyLoopBadge"><span class="signal"></span><span class="focus-badge-text">looping allocation</span></span>
+         <span class="connection-key"><span class="swatch"></span>live dotted connection</span>
          <span class="live-count" id="greedyCount" aria-live="polite">0 assigned · 0 skipped · 0 / ${SHOW} pairs shown</span>
        </div>
       <div class="allocation-callout fade-up d3" id="greedyNarrative" aria-live="polite"><span class="signal"></span><span><strong>Ready.</strong> Press replay to watch the strongest available pair claim both sides.</span></div>
@@ -1427,7 +1434,8 @@ SCENES[5] = {
     const SHOW = Math.min(24, R.walk.length);
     const rows = document.querySelectorAll('#pairList .pair-row[data-i]');
     rows.forEach(r => { r.classList.remove('cursor', 'done-yes', 'done-no'); r.querySelector('.st').textContent = ''; });
-    document.querySelectorAll('.bm-line').forEach(l => { l.style.transition = 'none'; l.style.strokeDashoffset = '100'; });
+    document.querySelectorAll('.bm-line').forEach(l => { l.style.transition = 'none'; l.style.strokeDashoffset = '100'; l.classList.remove('live'); });
+    document.querySelectorAll('.bm-line-live').forEach(l => l.classList.remove('live'));
     document.querySelectorAll('.bm-dot-c').forEach(d => d.classList.remove('used', 'live'));
     document.querySelectorAll('.bm-dot-t').forEach(d => d.classList.remove('matched', 'live'));
     const count = $('greedyCount');
@@ -1439,9 +1447,11 @@ SCENES[5] = {
       if(narrative) narrative.innerHTML = `<span class="signal"></span><span><strong>${strong}</strong> ${message}</span>`;
     };
 
-    const revealAssign = (t, c) => {
-      const line = $('bl' + t.rm);
-       if(line){ line.style.transition = 'stroke-dashoffset 0.45s ease'; line.style.strokeDashoffset = '0'; line.classList.add('live'); after(560, () => line.classList.remove('live'), S.timers); }
+     const revealAssign = (t, c) => {
+       const line = $('bl' + t.rm);
+       const liveLine = $('bll' + t.rm);
+       if(line){ line.style.transition = 'stroke-dashoffset 0.55s ease'; line.style.strokeDashoffset = '0'; line.classList.add('live'); after(900, () => line.classList.remove('live'), S.timers); }
+       if(liveLine){ liveLine.classList.add('live'); after(900, () => liveLine.classList.remove('live'), S.timers); }
        const dt = $('bt' + t.rm), dc = $('bc' + c.rm);
        if(dt) dt.classList.add('matched', 'live');
        if(dc) dc.classList.add('used', 'live');
@@ -1470,7 +1480,7 @@ SCENES[5] = {
     if(RM_REDUCED){ finish(); return; }
 
     let i = 0;
-     const stepMs = 620;
+      const stepMs = 1000;
     const step = () => {
       if(i >= SHOW){ // fast-forward whatever wasn't shown
         for(const a of R.assignments) revealAssign(a.t, a.c);
