@@ -1450,15 +1450,15 @@ SCENES[5] = {
      const revealAssign = (t, c) => {
        const line = $('bl' + t.rm);
        const liveLine = $('bll' + t.rm);
-       if(line){ line.style.transition = 'stroke-dashoffset 0.55s ease'; line.style.strokeDashoffset = '0'; line.classList.add('live'); after(900, () => line.classList.remove('live'), S.timers); }
-       if(liveLine){ liveLine.classList.add('live'); after(900, () => liveLine.classList.remove('live'), S.timers); }
+       if(line){ line.style.transition = RM_REDUCED ? 'none' : 'stroke-dashoffset 0.55s ease'; line.style.strokeDashoffset = '0'; line.classList.add('live'); S.timers.push(setTimeout(() => line.classList.remove('live'), 900)); }
+       if(liveLine){ liveLine.classList.add('live'); S.timers.push(setTimeout(() => liveLine.classList.remove('live'), 900)); }
        const dt = $('bt' + t.rm), dc = $('bc' + c.rm);
        if(dt) dt.classList.add('matched', 'live');
        if(dc) dc.classList.add('used', 'live');
-       after(520, () => {
+       S.timers.push(setTimeout(() => {
          if(dt) dt.classList.remove('live');
          if(dc) dc.classList.remove('live');
-       }, S.timers);
+       }, 900));
     };
     const finish = () => {
       for(const a of R.assignments) revealAssign(a.t, a.c);
@@ -1473,13 +1473,12 @@ SCENES[5] = {
        if(narrative) narrative.innerHTML = `<span class="signal"></span><span><strong>Allocation complete.</strong> ${nA} unique controls are locked to ${nA} targets; ${nS} candidate rows were rejected because one side was already claimed.</span>`;
     };
     const scheduleLoop = () => {
-      if(!S.loopPaused && !RM_REDUCED && visibleScenes.has(5)){
-        S.timers.push(setTimeout(() => SCENES[5].play(), 1500));
-      }
-    };
-    if(RM_REDUCED){ finish(); return; }
+       if(!S.loopPaused && visibleScenes.has(5)){
+         S.timers.push(setTimeout(() => SCENES[5].play(), 1500));
+       }
+     };
 
-    let i = 0;
+     let i = 0;
       const stepMs = 1000;
     const step = () => {
       if(i >= SHOW){ // fast-forward whatever wasn't shown
