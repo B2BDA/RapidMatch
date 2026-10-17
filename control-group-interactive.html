@@ -769,6 +769,7 @@ let cfg = { ...DEFAULT_CFG };
 let R = runPipeline(cfg);
 let focusRm = null; // focused target for scenes 3-4
 let focusPlaybackPaused = false;
+let focusCycleTimer = 0;
 
 const fmt = (x, d = 2) => Number(x).toFixed(d);
 const $ = id => document.getElementById(id);
@@ -856,11 +857,23 @@ function after(ms, fn, bag){
   return id;
 }
 function clearTimers(bag){ if(bag){ bag.forEach(clearTimeout); bag.length = 0; } }
+function clearFocusCycle(){
+  if(focusCycleTimer){ clearTimeout(focusCycleTimer); focusCycleTimer = 0; }
+}
+function scheduleFocusCycle(delay){
+  clearFocusCycle();
+  if(RM_REDUCED || focusPlaybackPaused || (!visibleScenes.has(3) && !visibleScenes.has(4))) return;
+  focusCycleTimer = setTimeout(() => {
+    focusCycleTimer = 0;
+    if(!focusPlaybackPaused && (visibleScenes.has(3) || visibleScenes.has(4))) advanceFocus('auto');
+  }, delay);
+}
 function clearTimersForAllScenes(){
   for(const k in sceneState){
     clearTimers(sceneState[k].timers);
     if(sceneState[k].raf) cancelAnimationFrame(sceneState[k].raf);
   }
+  clearFocusCycle();
 }
 
 // per-scene playback state
@@ -1153,6 +1166,7 @@ function renderFocusScenes(owner, announceSelection = false){
   if(announceSelection) announce(`${target.id} selected. Showing ${candidatesFor(target).length} eligible control candidates.`);
 }
 function advanceFocus(owner){
+  if(owner === 'auto' && (RM_REDUCED || focusPlaybackPaused)) return;
   const next = nextFocusTarget();
   if(!next) return;
   focusRm = next.rm;
@@ -1229,6 +1243,7 @@ SCENES[3] = {
     document.querySelectorAll('[data-tfocus]').forEach(el => {
       const select = () => {
         focusPlaybackPaused = true;
+        clearFocusCycle();
         focusRm = +el.dataset.tfocus;
         renderFocusScenes(3, true);
       };
@@ -1241,6 +1256,7 @@ SCENES[3] = {
       button.addEventListener('click', () => {
         focusPlaybackPaused = !focusPlaybackPaused;
         updateFocusControls();
+        if(focusPlaybackPaused) clearFocusCycle();
         clearTimers(st(3).timers);
         clearTimers(st(4).timers);
         if(!focusPlaybackPaused) renderFocusScenes(3);
@@ -1249,6 +1265,7 @@ SCENES[3] = {
     document.querySelectorAll('#sc3 [data-focus-next]').forEach(button => {
       button.addEventListener('click', () => {
         focusPlaybackPaused = true;
+        clearFocusCycle();
         advanceFocus(3);
       });
     });
@@ -1274,9 +1291,7 @@ SCENES[3] = {
         }
       }, S.timers);
     });
-    if(!RM_REDUCED && !focusPlaybackPaused && visibleScenes.has(3)){
-      after(2300 + Math.min(8, cands.length) * 160, () => advanceFocus(3), S.timers);
-    }
+    scheduleFocusCycle(2300 + Math.min(8, cands.length) * 160);
   }
 };
 
@@ -1317,6 +1332,7 @@ SCENES[4] = {
       button.addEventListener('click', () => {
         focusPlaybackPaused = !focusPlaybackPaused;
         updateFocusControls();
+        if(focusPlaybackPaused) clearFocusCycle();
         clearTimers(st(3).timers);
         clearTimers(st(4).timers);
         if(!focusPlaybackPaused) renderFocusScenes(4);
@@ -1325,6 +1341,7 @@ SCENES[4] = {
     document.querySelectorAll('#sc4 [data-focus-next]').forEach(button => {
       button.addEventListener('click', () => {
         focusPlaybackPaused = true;
+        clearFocusCycle();
         advanceFocus(4);
       });
     });
@@ -1339,8 +1356,8 @@ SCENES[4] = {
     document.querySelectorAll('#capList .cap-pending').forEach((row, i) => {
       after(RM_REDUCED ? 0 : 650 + i * 130, () => { row.classList.add('cut'); }, S.timers);
     });
-    if(!RM_REDUCED && !focusPlaybackPaused && !visibleScenes.has(3) && visibleScenes.has(4)){
-      after(3000 + Math.min(rows.length, 8) * 120, () => advanceFocus(4), S.timers);
+    if(!visibleScenes.has(3) && visibleScenes.has(4)){
+      scheduleFocusCycle(3000 + Math.min(rows.length, 8) * 120);
     }
   }
 };
@@ -1851,6 +1868,7 @@ const observer = new IntersectionObserver(entries => {
       visibleScenes.delete(n);
       clearTimers(st(n).timers);
       if(n === 3 && visibleScenes.has(4) && !focusPlaybackPaused) SCENES[4].play();
+      if((n === 3 || n === 4) && !visibleScenes.has(3) && !visibleScenes.has(4)) clearFocusCycle();
     }
     if(railDots[n]) railDots[n].classList.toggle('active', e.isIntersecting);
   }
